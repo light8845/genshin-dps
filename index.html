@@ -611,9 +611,18 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
   - 同時附著的不確定性（多後手隨機反應順序）
   - 燃燒/感電的持續傷害自動插入
   - 月反應、魔導反應等新機制
-  - 命座效果對傷害的修正（C3/C5天賦等級提升已在UI顯示，但計算中尚未套用）
-  - 聖遺物套裝效果（需要手動輸入「其他傷害加成%」暫代）
+  - 命座效果對傷害的修正（C3/C5天賦等級提升已在UI顯示；數值類命座可用下方 buffs 系統表達）
+  - 聖遺物套裝效果（可用 buffs 系統表達，或手動輸入「其他傷害加成%」暫代）
   - 武器被動效果（部分需要追蹤疊層數）
+
+  [已實作] 定時 BUFF 系統（資料驅動）─────────────────────────────
+  角色資料可加 buffs:[{...}]，引擎依輪替時間軸自動套用、到期失效、並在「BUFF 情況」面板顯示時點與持續秒數。
+    欄位：name / trigger:'always'|'skill'|'burst'|'normal' / duration(秒) / target:'team'|'self'
+          / cons:<需要命座數,省略或0=天賦預設> / effects:{...}
+    effects 可用：atkPct, atkFlat(數字 或 {ofCasterAtk,cap,flat} 依施放者攻擊力換算),
+                  dmgBonus, elemDmg:{pyro:..}, critRate, critDmg, em, defShred, resShred:{pyro:..|all:..}
+    範例：尼可（戰技→全隊加攻）、瓦雷莎（C6→自身雙暴）。
+    ※支援/命座增益請每次新增角色時一併補上 buffs。
 
 */
 let CHARS = {  // 內建後備資料；若能讀到 characters.json 會被覆蓋
@@ -5430,6 +5439,79 @@ function buildDOTEvents(rotationList) {
 }
 
 // ─────────────────────────────────────────────────────
+// 定時 BUFF 引擎（資料驅動）
+//   角色資料可含 buffs:[{name, trigger:'always'|'skill'|'burst', duration, target:'team'|'self',
+//                        cons:<需要命座數,0=天賦預設>, effects:{...}}]
+//   effects 支援：atkPct, atkFlat(數字 或 {ofCasterAtk,cap,flat}), dmgBonus,
+//                 elemDmg:{pyro:..}, critRate, critDmg, em, defShred, resShred:{pyro:..|all:..}
+// ─────────────────────────────────────────────────────
+function resolveBuffEff(effects, cst){
+  const e=Object.assign({}, effects);
+  if(e.atkFlat && typeof e.atkFlat==='object'){
+    const o=e.atkFlat; let v=(o.ofCasterAtk||0)*(cst.atk||0);
+    if(o.cap!=null) v=Math.min(v,o.cap);
+    e.atkFlat=v+(o.flat||0);
+  }
+  return e;
+}
+function buildActiveBuffs(timeline){
+  const inst=[];
+  const seen=new Set();
+  team.forEach(id=>{
+    if(!id||seen.has(id)) return; seen.add(id);
+    const c=CHARS[id]; if(!c||!Array.isArray(c.buffs)) return;
+    const cst=teamStats[id]||defaultStats(id);
+    c.buffs.forEach(b=>{
+      if(b.cons && (cst.constLv||0) < b.cons) return;           // 命座未解鎖
+      const eff=resolveBuffEff(b.effects||{}, cst);
+      const target=b.target||'team';
+      if(b.trigger==='always' || !b.trigger){
+        inst.push({casterId:id, name:b.name, start:0, end:Infinity, dur:0, target, eff});
+        return;
+      }
+      timeline.forEach(ev=>{
+        const act=ev.action||'';
+        const match = b.trigger==='burst' ? act==='burst'
+                    : b.trigger==='skill' ? (act==='skill'||act.startsWith('skill_'))
+                    : b.trigger==='normal'? act==='normal' : false;
+        if(ev.charId===id && match){
+          inst.push({casterId:id, name:b.name, start:ev.time, end:ev.time+(b.duration||0), dur:(b.duration||0), target, eff});
+        }
+      });
+    });
+  });
+  return inst;
+}
+function aggBuffs(inst, charId, time, elem){
+  const B={atkPct:0,atkFlat:0,dmgBonus:0,elemDmg:0,critRate:0,critDmg:0,em:0,resShred:0,defShred:0};
+  if(!inst||!inst.length) return B;
+  inst.forEach(b=>{
+    if(time < b.start-1e-9 || time >= b.end) return;
+    if(b.target==='self' && b.casterId!==charId) return;
+    const e=b.eff;
+    B.atkPct+=e.atkPct||0; B.atkFlat+=e.atkFlat||0; B.dmgBonus+=e.dmgBonus||0;
+    B.critRate+=e.critRate||0; B.critDmg+=e.critDmg||0; B.em+=e.em||0; B.defShred+=e.defShred||0;
+    if(e.elemDmg) B.elemDmg+=(e.elemDmg[elem]||0);
+    if(e.resShred) B.resShred+=(e.resShred[elem]||e.resShred.all||0);
+  });
+  return B;
+}
+function pushBuffDisplay(inst, buffLog){
+  const shown=new Set();
+  inst.forEach(b=>{
+    const cname=(CHARS[b.casterId]||{}).name||b.casterId;
+    const tgt=b.target==='self'?'自身':'全隊';
+    if(b.end===Infinity){
+      const key='always|'+b.casterId+'|'+b.name;
+      if(shown.has(key)) return; shown.add(key);
+      buffLog.push({time:0, text:`${cname} ${b.name}（${tgt}・全程）`});
+    } else {
+      buffLog.push({time:b.start, text:`${cname} ${b.name}（${tgt}・持續${b.dur}s）`});
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────
 // MAIN CALCULATION
 // ─────────────────────────────────────────────────────
 function runCalculation() {
@@ -5446,6 +5528,7 @@ function runCalculation() {
   const dmgLog=[], buffLog=[];
   let totalDmg=0;
   const buffState={zhongli_shield:false};
+  const bolState={};  // 生命之契後台狀態（charId -> 當前生命之契%）；不顯示於 UI
   // ── 月結晶追蹤器 ──────────────────────────────────────
   const lunarCrystalOn = teamHasLunarCrystal();
   const lunarCrystal = { triggerLog: [], waterAuraBy: null };
@@ -5461,6 +5544,9 @@ function runCalculation() {
   const timeline = rotSeq.map(entry=>{ t+=entry.timing; return {...entry,time:t}; });
   const dotEvents = buildDOTEvents(rotSeq);
   const allEvents = [...timeline,...dotEvents].sort((a,b)=>a.time-b.time);
+  // 定時 buff：依時間軸算出所有生效中的 buff，並列入 BUFF 面板
+  const buffInst = buildActiveBuffs(timeline);
+  pushBuffDisplay(buffInst, buffLog);
 
   let prevTime=0;
   allEvents.forEach(entry=>{
@@ -5475,6 +5561,7 @@ function runCalculation() {
 
     // Get mults
     let mults,hits;
+    let bolApplies=false, bolCoeff=0;  // 生命之契：本次動作是否吃額外倍率區、係數
     if(entry.isDOT) {
       mults=entry.mults||[]; hits=entry.hits||mults.map((_,i)=>`[${i+1}]`);
     } else {
@@ -5486,6 +5573,13 @@ function runCalculation() {
       if(isSkillAct)         {talent=c.talents.skill;   talentKey='skill';}
       if(action==='burst')   {talent=c.talents.burst;   talentKey='burst';}
       const lv=tlv[talentKey]||10;
+      // ── 生命之契（後台額外倍率區，不顯示於UI）──
+      const _bol=c.bondOfLife;
+      if(_bol){
+        if(bolState[charId]==null) bolState[charId]=_bol.startPct;          // 初始化
+        if((_bol.refillOn||[]).includes(action)) bolState[charId]=_bol.startPct;  // 重擊/戰技回收 → 回滿
+        if(action===_bol.applyTo){ bolApplies=true; bolCoeff=_bol.coeffByLevel[Math.min(14,Math.max(0,lv-1))]||0; }
+      }
       let allMults=getMults(talent,lv);
       // Normal: single segment
       if(action==='normal'&&entry.hitIndex!=null) {
@@ -5500,9 +5594,10 @@ function runCalculation() {
     }
     if(!mults.length) return;
 
-    const atk=st.atk; const cr=Math.min(st.cr/100,1); const cd_v=st.cd/100;
-    const em=st.em; const ed=st.ed/100; const bon=st.bonus/100; const cLv=+st.clv||90;
-    const defMult=(cLv+100)/((cLv+100)+(eLv+100)*(1-defS));
+    const B=aggBuffs(buffInst, charId, time, elem);
+    const atk=st.atk*(1+B.atkPct)+B.atkFlat; const cr=Math.min(st.cr/100+B.critRate,1); const cd_v=st.cd/100+B.critDmg;
+    const em=st.em+B.em; const ed=st.ed/100; const bon=st.bonus/100; const cLv=+st.clv||90;
+    const defMult=(cLv+100)/((cLv+100)+(eLv+100)*(1-defS-B.defShred));
     const canAttach=attachTracker.canAttach(charId,cdGroup,cdType,time);
     const reaction=canAttach?getReactionType(enemy,elem):null;
     // 月感電：隊伍含月感電角色時，角色觸發的感電轉為月感電（改由雷暴雲加權結算，抑制原本感電的一次性傷害）
@@ -5513,11 +5608,11 @@ function runCalculation() {
     else if(reaction==='melt') ampMult=(elem==='pyro'?2.0:1.5)*(1+emA);
     else if(reaction&&TRANS_MULT[reaction]&&!isLunarCharged) transExtra=TRANS_MULT[reaction]*(LEVEL_BASE_DMG[cLv]||1447)*(1+emT);
 
-    let effRes=eRes-resS;
+    let effRes=eRes-resS-B.resShred;
     if(buffState.zhongli_shield) effRes-=0.20;
     const resMult=effRes<0?1-effRes/2:effRes<0.75?1-effRes:1/(4*effRes+1);
 
-    let dmgBonus=1+ed+bon;
+    let dmgBonus=1+ed+bon+B.dmgBonus+B.elemDmg;
     if(charId==='hutao'&&elem==='pyro') dmgBonus+=0.33;
     let catFlatAdd=0;
     if(reaction==='aggravate') catFlatAdd=(LEVEL_BASE_DMG[cLv]||1447)*1.15*(1+emC)*resMult;
@@ -5589,7 +5684,10 @@ function runCalculation() {
 
     mults.forEach((m,mi)=>{
       if(typeof m!=='number'||m<=0||m>=20) return;
-      const pre=atk*m*defMult*resMult*dmgBonus;
+      // 生命之契：額外倍率區（加在倍率上，會被蒸發/融化放大），逐擊乘法消耗
+      let bolExtra=0;
+      if(bolApplies){ const p=bolState[charId]; if(p!=null&&p>=c.bondOfLife.minPct){ bolExtra=p*bolCoeff; bolState[charId]=p*(1-c.bondOfLife.decayPerHit); } }
+      const pre=atk*(m+bolExtra)*defMult*resMult*dmgBonus;
       let normHit,critHit,expHit;
       if(transExtra>0){normHit=pre;critHit=pre*(1+cd_v);expHit=pre*critMult+transExtra*resMult;}
       else if(catFlatAdd>0){normHit=pre+catFlatAdd;critHit=pre*(1+cd_v)+catFlatAdd;expHit=(pre+catFlatAdd)*critMult;}
