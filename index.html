@@ -119,6 +119,9 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 .act-btn{position:relative;padding:4px 10px;border-radius:20px;border:1px solid var(--border);background:var(--bg3);color:var(--text2);font-size:11px;cursor:pointer;transition:all 0.15s;white-space:nowrap}
 .act-btn:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
 .act-btn:disabled{opacity:0.35;cursor:not-allowed}
+.act-btn.form-alt,.row-form-alt .act-btn{background:#2a2030;border-color:#9d6bd6;color:#c9a6f0}
+.act-btn.form-btn{font-weight:600}
+.rot-token.form-alt{background:#2a2030;color:#c9a6f0;border:1px solid #9d6bd6}
 .cd-badge{position:absolute;top:-5px;right:-5px;background:#c53030;color:#fff;border-radius:99px;font-size:9px;padding:1px 4px;min-width:18px;text-align:center;pointer-events:none}
 .skill-modal{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:100}
 .skill-modal-box{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:20px;min-width:220px}
@@ -559,27 +562,31 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 §8. 持續傷害（DOT）說明
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-鍾離岩脊共鳴：
+[通用後台/持續傷害系統（資料驅動）]
+  角色資料可加 persistent:[{...}]，引擎會在角色施放對應技能時，依「間隔×持續」自動在時間軸插入後台 tick：
+    name / trigger:'skill'|'burst'|'normal' / talent:對應天賦鍵(如 'skill_oz') / hitIndex
+    element / gauge / interval(間隔秒) / duration(持續秒) / cdGroup / cdType / cons(可選)
+  tick 會鎖定施放當下面板，並照常吃元素反應與隊伍 buff。
+  範例：菲謝爾奧茲（戰技→每1秒、持續10秒的雷傷）。
+  ※召喚物/後台持續傷害請每次新增角色時一併補上 persistent。
+  （注意：避免重複計算——把「召喚當下傷害」留在原技能，把「重複 tick」另存一個天賦鍵供 persistent 引用，如 skill_oz / skill_crimson）
+
+鍾離岩脊共鳴（內建特例）：
   觸發條件：長E/短E施放後每2秒一次，直到岩脊消失（存在30秒）或Rotation結束
-  元素量：1U，元素戰技組，默認冷卻（共鳴觸發冷卻2秒）
-  傷害倍率：skill.lv[lv-1][1]（共鳴傷害為第2個數值）
-  面板鎖定：鎖施放E當下的鍾離面板
+  傷害倍率：skill.lv[lv-1][1]（共鳴傷害為第2個數值）；鎖施放E當下面板
 
-胡桃血梅香：
-  觸發條件：重擊命中後施加血梅香，每4秒造成一次火元素戰技傷害，持續8秒（共2次）
-  元素量：1U，無標籤，無冷卻（攻擊觸發冷卻4秒）
-  傷害倍率：skill_crimson.lv[lv-1][0]（血梅香傷害）
-  面板鎖定：鎖施放戰技當下的胡桃面板
+胡桃血梅香（內建特例）：
+  觸發條件：重擊命中後施加血梅香，每4秒一次，持續8秒（共2次）
+  傷害倍率：skill_crimson.lv[lv-1][0]；鎖施放戰技當下面板
 
-燃燒持續攻擊：
-  每0.25秒一次，持續期間每秒最多8次傷害
-  等級基數 × 0.25 × (1 + EM劇變加成)
-  (未來擴充：待實作)
+燃燒持續攻擊：[已實作]
+  火+草共存時每0.25秒一跳，倍率 0.25 × 等級基數 × (1 + EM劇變加成) × 抗性區
+  沿時間軸自動插入；精通取隊伍最高者為代表（劇變與攻擊力無關）
 
-感電持續傷害：
-  每1秒一次，直到水或雷其中一方消耗殆盡
-  等級基數 × 1.2 × (1 + EM劇變加成)
-  (未來擴充：待實作)
+感電持續傷害：[已實作]
+  電+水共存時每1秒一跳，倍率 1.2 × 等級基數 × (1 + EM劇變加成) × 抗性區，每跳各消耗 0.4U
+  沿時間軸自動插入；與「攻擊觸發的那一跳」用間隔內去重，避免重複計算
+  ※靠估算附著共存時間，屬近似
 
 月感電（Lunarcharged）— 階段一已實作：
   觸發：隊伍含 lunarReaction:'lunarcharged' 角色時，角色觸發的感電轉為月感電
@@ -609,7 +616,6 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 
   - 碎冰反應（鈍擊/岩傷攻擊 + 凍結狀態冰元素）
   - 同時附著的不確定性（多後手隨機反應順序）
-  - 燃燒/感電的持續傷害自動插入
   - 月反應、魔導反應等新機制
   - 命座效果對傷害的修正（C3/C5天賦等級提升已在UI顯示；數值類命座可用下方 buffs 系統表達）
   - 聖遺物套裝效果（可用 buffs 系統表達，或手動輸入「其他傷害加成%」暫代）
@@ -4624,7 +4630,7 @@ const AMP_BASE = {
 const TRANS_MULT = {
   overloaded: 2.0, superconduct: 0.5, swirl_pyro: 0.6, swirl_hydro: 0.6,
   swirl_elec: 0.6, swirl_cryo: 0.6, electrocharged: 1.2, bloom: 2.0,
-  hyperbloom: 3.0, burgeon: 3.0
+  hyperbloom: 3.0, burgeon: 3.0, burning: 0.25
 };
 
 const LEVEL_BASE_DMG = { // character level -> base damage for transformation reactions
@@ -4981,6 +4987,7 @@ let activeSlot = 0;
 let elemFilter = 'all';
 const rotSeq = []; // [{charId, action, label, timing, elem, gauge, cdGroup, cdType}]
 const burstUsed = {};
+const formState = {};  // 型態角色（如杜林）目前型態 id
 
 function defaultStats(charId) {
   const c = CHARS[charId];
@@ -5246,6 +5253,13 @@ function renderCharActionRows() {
       const badge=onCD?`<span class="cd-badge">${cd.toFixed(1)}</span>`:bUsed?`<span class="cd-badge">✓</span>`:'';
       btns+=`<button class="act-btn${dis?' on-cd':''}" ${dis?'disabled':''} onclick="addAct('${id}','${a.key}')">${a.label}${badge}</button>`;
     });
+    if(c.forms){
+      const fid=formState[id]||c.forms[0].id;
+      const cur=c.forms.find(x=>x.id===fid)||c.forms[0];
+      const alt=fid!==c.forms[0].id;
+      if(alt) row.className='char-action-row row-form-alt';
+      btns+=`<button class="act-btn form-btn${alt?' form-alt':''}" onclick="toggleForm('${id}')" title="切換型態（白龍/黑龍）">${cur.label}</button>`;
+    }
     row.innerHTML=`<div class="act-avatar" style="background:var(--${c.element}-bg)">${charIconHTML(c,28)}</div>${btns}`;
     container.appendChild(row);
   });
@@ -5280,6 +5294,13 @@ const normalHitIndex = {};
 function addAct(charId, actionKey) {
   const c=CHARS[charId];
   if(actionKey==='skill'&&c.skillVariants){showSkillModal(charId);return;}
+  // 型態角色（如杜林）：依目前型態把動作換成變體（burst -> burst_white / burst_black）
+  let formInfo=null;
+  if(c.forms && (c.formActions||[]).includes(actionKey)){
+    const fid=formState[charId]||c.forms[0].id;
+    formInfo=c.forms.find(x=>x.id===fid)||c.forms[0];
+    actionKey=actionKey+'_'+fid;
+  }
 
   const at=c.actionTiming||{};
   let timing=0.2;
@@ -5288,6 +5309,7 @@ function addAct(charId, actionKey) {
   if(actionKey==='skill')   timing=at.skill||0.8;
   if(actionKey==='burst')   timing=at.burst||1.5;
   if(actionKey.startsWith('skill_')) timing=at[actionKey]||0.8;
+  if(actionKey.startsWith('burst_')) timing=at[actionKey]||1.5;
 
   const app=c.appData||{};
   let appKey=actionKey;
@@ -5324,13 +5346,26 @@ function addAct(charId, actionKey) {
     label=c.name.slice(0,2)+' '+(v?.label||'E');
     appKey=actionKey;
   }
+  if(formInfo){
+    const base=actionKey.replace('_'+formInfo.id,'');
+    label=c.name.slice(0,2)+' '+(labels[base]||base)+'·'+formInfo.label.replace('🐉','');
+    appKey=actionKey;
+  }
 
   rotSeq.push({charId,action:actionKey,label,timing,hitIndex,
     elem:appInfo.elem||c.element, gauge:appInfo.gauge||1,
     cdGroup:appInfo.cdGroup||'none', cdType:appInfo.cdType||'no_cd',
-    appKey});
-  if(actionKey==='burst') burstUsed[charId]=true;
+    appKey, form:formInfo?formInfo.id:null, formAlt:!!(formInfo&&c.forms[0].id!==formInfo.id)});
+  if(actionKey==='burst'||actionKey.startsWith('burst_')) burstUsed[charId]=true;
   renderRotSeq();
+  renderCharActionRows();
+}
+
+function toggleForm(id){
+  const c=CHARS[id]; if(!c||!c.forms)return;
+  const cur=formState[id]||c.forms[0].id;
+  const i=c.forms.findIndex(x=>x.id===cur);
+  formState[id]=c.forms[(i+1)%c.forms.length].id;
   renderCharActionRows();
 }
 
@@ -5357,7 +5392,8 @@ function renderRotSeq() {
     if(e.action==='normal') cls+='normal';
     else if(e.action==='charged') cls+='charged';
     else if(isSkill(e.action)) cls+='skill';
-    else if(e.action==='burst') cls+='burst';
+    else if(e.action==='burst'||e.action.startsWith('burst_')) cls+='burst';
+    if(e.formAlt) cls+=' form-alt';
     return `<span class="${cls}" onclick="removeAct(${i})" title="點擊移除">${e.label}</span>`;
   }).join('');
   document.getElementById('rot-total-time').textContent=rotSeq.reduce((s,e)=>s+e.timing,0).toFixed(1)+'s';
@@ -5433,6 +5469,41 @@ function buildDOTEvents(rotationList) {
           tick += 2;
         }
       }
+    }
+
+    // ── 通用後台/持續傷害（資料驅動）──
+    //   角色資料 persistent:[{name, trigger:'skill'|'burst', talent:'skill'|'burst'|..., hitIndex,
+    //                         element, gauge, interval, duration, cdGroup, cdType, cons}]
+    if(Array.isArray(c.persistent)){
+      const act = entry.action||'';
+      c.persistent.forEach(p=>{
+        if(p.cons && (st.constLv||0) < p.cons) return;
+        const match = (act===p.trigger)
+                    || (p.trigger==='burst' && (act==='burst'||act.startsWith('burst_')))
+                    || (p.trigger==='skill' && (act==='skill'||act.startsWith('skill_')))
+                    || (p.trigger==='normal'&& act==='normal');
+        if(!match) return;
+        const tal = c.talents[p.talent]; if(!tal) return;
+        const lvKey = (p.talent==='burst') ? 'burst' : (p.talent.startsWith('skill') ? 'skill' : 'normal');
+        const lv = st.talentLv[lvKey] || 10;
+        const mults = getMults(tal, lv);
+        const m = mults[p.hitIndex||0];
+        if(!(m>0)) return;
+        const iv = p.interval||1, dur = p.duration||0;
+        let k=1;
+        while(true){
+          const tt = elapsed + iv*k;
+          if(tt > Math.min(elapsed + dur, totalTime + 0.5)) break;
+          dots.push({
+            time:tt, charId:entry.charId, label:`${c.name} ${p.name}`,
+            elem:p.element||'physical', gauge:p.gauge||0,
+            cdGroup:p.cdGroup||'no_cd', cdType:p.cdType||'no_cd',
+            isLocked:true, lockedStats:{...st, talentLv:{...st.talentLv}},
+            mults:[m], hits:[p.name], isDOT:true,
+          });
+          k++;
+        }
+      });
     }
   });
   return dots;
@@ -5543,7 +5614,19 @@ function runCalculation() {
   let t=0;
   const timeline = rotSeq.map(entry=>{ t+=entry.timing; return {...entry,time:t}; });
   const dotEvents = buildDOTEvents(rotSeq);
-  const allEvents = [...timeline,...dotEvents].sort((a,b)=>a.time-b.time);
+  // 反應持續傷害：燃燒每0.25s、感電每1s，沿時間軸插入「檢查跳」（共存才結算）
+  const _totalT = timeline.length?timeline[timeline.length-1].time:0;
+  const _teamElems = new Set(team.filter(Boolean).map(id=>(CHARS[id]||{}).element));
+  const reactGrid=[];
+  const addReactGrid=(r,iv)=>{ for(let tt=iv; tt<=_totalT+1e-6; tt+=iv) reactGrid.push({time:+tt.toFixed(3), tickCheck:r}); };
+  if(_teamElems.has('pyro')&&_teamElems.has('dendro')) addReactGrid('burning',0.25);
+  if(_teamElems.has('electro')&&_teamElems.has('hydro')) addReactGrid('electrocharged',1.0);
+  const allEvents = [...timeline,...dotEvents,...reactGrid].sort((a,b)=>a.time-b.time);
+  // 反應持續傷害的代表性精通/等級（取隊伍最高精通者；劇變傷害與攻擊力無關）
+  const _teamIds=team.filter(Boolean);
+  const reactEM = _teamIds.length?Math.max(..._teamIds.map(id=>(teamStats[id]||defaultStats(id)).em||0)):0;
+  const reactLv = (teamStats[_teamIds[0]]||{}).clv || 90;
+  const lastReact={burning:-9,electrocharged:-9};
   // 定時 buff：依時間軸算出所有生效中的 buff，並列入 BUFF 面板
   const buffInst = buildActiveBuffs(timeline);
   pushBuffDisplay(buffInst, buffLog);
@@ -5552,12 +5635,25 @@ function runCalculation() {
   allEvents.forEach(entry=>{
     const deltaT=Math.max(0, entry.time-prevTime);
     prevTime=entry.time;
+    enemy.applyDecay(deltaT);
+    // ── 反應持續傷害檢查跳（燃燒每0.25s／感電每1s；雙元素共存才結算）──
+    if(entry.tickCheck){
+      const r=entry.tickCheck, iv=(r==='burning'?0.25:1.0);
+      const pair=(r==='burning'?['pyro','dendro']:['electro','hydro']);
+      if(enemy.getAmount(pair[0])>1e-4 && enemy.getAmount(pair[1])>1e-4 && (entry.time-lastReact[r])>=iv-1e-6){
+        const effR=eRes-resS;
+        const rMult=effR<0?1-effR/2:effR<0.75?1-effR:1/(4*effR+1);
+        const tick=(TRANS_MULT[r]||0)*(LEVEL_BASE_DMG[reactLv]||1447)*(1+emTransBonus(reactEM))*rMult;
+        if(tick>0){ totalDmg+=tick;
+          dmgLog.push({time:entry.time, html:`<span class="react-tag ${r}">${reactionName(r)}·持續</span> 期望:<strong>${Math.round(tick).toLocaleString()}</strong>`}); }
+        if(r==='electrocharged'){ enemy.removeAmount('electro',0.4); enemy.removeAmount('hydro',0.4); }
+      }
+      return;
+    }
     const {charId,elem,gauge,cdGroup,cdType,time}=entry;
     const c=CHARS[charId];
     const st=entry.isLocked?entry.lockedStats:(teamStats[charId]||defaultStats(charId));
     const tlv=st.talentLv;
-
-    enemy.applyDecay(deltaT);
 
     // Get mults
     let mults,hits;
@@ -5568,10 +5664,11 @@ function runCalculation() {
       const {action}=entry;
       let talent=null; let talentKey='normal';
       const isSkillAct=action==='skill'||action.startsWith('skill_');
+      const isBurstAct=action==='burst'||action.startsWith('burst_');
       if(action==='normal')  {talent=c.talents.normal;  talentKey='normal';}
       if(action==='charged') {talent=c.talents.charged; talentKey='normal';}
-      if(isSkillAct)         {talent=c.talents.skill;   talentKey='skill';}
-      if(action==='burst')   {talent=c.talents.burst;   talentKey='burst';}
+      if(isSkillAct)         {talent=c.talents[action]||c.talents.skill;   talentKey='skill';}
+      if(isBurstAct)         {talent=c.talents[action]||c.talents.burst;   talentKey='burst';}
       const lv=tlv[talentKey]||10;
       // ── 生命之契（後台額外倍率區，不顯示於UI）──
       const _bol=c.bondOfLife;
@@ -5652,6 +5749,7 @@ function runCalculation() {
         }
       }
       if(reaction) processReaction(enemy,elem,ag,reaction,!entry.isDOT);
+      if((reaction==='burning'||reaction==='electrocharged')&&!entry.tickCheck) lastReact[reaction]=time;
       if(!reaction||['aggravate','spread','electrocharged','burning','quicken'].includes(reaction))
         enemy.addElement(elem,ag,charId);
       if(!entry.isDOT&&charId==='zhongli') {
