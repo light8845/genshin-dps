@@ -122,6 +122,9 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 .act-btn.form-alt,.row-form-alt .act-btn{background:#2a2030;border-color:#9d6bd6;color:#c9a6f0}
 .act-btn.form-btn{font-weight:600}
 .rot-token.form-alt{background:#2a2030;color:#c9a6f0;border:1px solid #9d6bd6}
+.act-btn.stage2-glow{border-color:var(--gold);color:var(--gold);background:rgba(255,200,80,0.12);animation:stage2pulse 1s ease-in-out infinite}
+@keyframes stage2pulse{0%,100%{box-shadow:0 0 3px rgba(255,200,80,0.5)}50%{box-shadow:0 0 11px 2px rgba(255,200,80,0.9)}}
+.stage2-hint{font-size:10px;color:var(--gold);margin-left:6px;align-self:center;white-space:nowrap}
 .cd-badge{position:absolute;top:-5px;right:-5px;background:#c53030;color:#fff;border-radius:99px;font-size:9px;padding:1px 4px;min-width:18px;text-align:center;pointer-events:none}
 .skill-modal{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:100}
 .skill-modal-box{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:20px;min-width:220px}
@@ -4988,6 +4991,7 @@ let elemFilter = 'all';
 const rotSeq = []; // [{charId, action, label, timing, elem, gauge, cdGroup, cdType}]
 const burstUsed = {};
 const formState = {};  // 型態角色（如杜林）目前型態 id
+const pendingStage = {};  // 二段技能：等待第二段輸入的角色
 
 function defaultStats(charId) {
   const c = CHARS[charId];
@@ -5244,23 +5248,32 @@ function renderCharActionRows() {
       {key:'burst',   label:'Q'},
     ];
 
+    const pend = pendingStage[id];
+    const ts = c.twoStage;
+    const branchKeys = (pend && ts && ts[pend]) ? Object.keys(ts[pend].branches) : [];
+
     let btns='';
     acts.forEach(a=>{
       const cd=cdState[id+'_'+a.key]||0;
       const onCD=cd>0;
       const bUsed=a.key==='burst'&&burstUsed[id];
-      const dis=onCD||bUsed;
+      let dis=onCD||bUsed;
+      const glow=branchKeys.includes(a.key);   // 二段可接的輸入 → 發亮且可點
+      if(glow) dis=false;
       const badge=onCD?`<span class="cd-badge">${cd.toFixed(1)}</span>`:bUsed?`<span class="cd-badge">✓</span>`:'';
-      btns+=`<button class="act-btn${dis?' on-cd':''}" ${dis?'disabled':''} onclick="addAct('${id}','${a.key}')">${a.label}${badge}</button>`;
+      btns+=`<button class="act-btn${dis?' on-cd':''}${glow?' stage2-glow':''}" ${dis?'disabled':''} onclick="addAct('${id}','${a.key}')">${a.label}${badge}</button>`;
     });
-    if(c.forms){
+    // 手動型態鈕：僅在「沒有二段技能」時才顯示（杜林改用二段，不顯示）
+    if(c.forms && !c.twoStage){
       const fid=formState[id]||c.forms[0].id;
       const cur=c.forms.find(x=>x.id===fid)||c.forms[0];
       const alt=fid!==c.forms[0].id;
       if(alt) row.className='char-action-row row-form-alt';
-      btns+=`<button class="act-btn form-btn${alt?' form-alt':''}" onclick="toggleForm('${id}')" title="切換型態（白龍/黑龍）">${cur.label}</button>`;
+      btns+=`<button class="act-btn form-btn${alt?' form-alt':''}" onclick="toggleForm('${id}')" title="切換型態">${cur.label}</button>`;
     }
-    row.innerHTML=`<div class="act-avatar" style="background:var(--${c.element}-bg)">${charIconHTML(c,28)}</div>${btns}`;
+    let hint='';
+    if(pend && ts && ts[pend]) hint=`<span class="stage2-hint">↳ ${ts[pend].hint||'可接二段'}</span>`;
+    row.innerHTML=`<div class="act-avatar" style="background:var(--${c.element}-bg)">${charIconHTML(c,28)}</div>${btns}${hint}`;
     container.appendChild(row);
   });
 }
@@ -5294,7 +5307,31 @@ const normalHitIndex = {};
 function addAct(charId, actionKey) {
   const c=CHARS[charId];
   if(actionKey==='skill'&&c.skillVariants){showSkillModal(charId);return;}
-  // 型態角色（如杜林）：依目前型態把動作換成變體（burst -> burst_white / burst_black）
+
+  // ── 二段技能（如杜林：E一段→再按E=白 / 按普攻=黑；克洛琳德夜巡同理）──
+  let forcedLabel=null, armPending=null, forcedFormAlt=false;
+  const ts=c.twoStage;
+  if(ts){
+    const pend=pendingStage[charId];
+    if(pend && ts[pend]){
+      const branch=ts[pend].branches[actionKey];   // 'skill' 或 'normal' → 對應變體
+      if(branch){
+        const formId=(ts[pend].forms||{})[branch];
+        if(formId){ formState[charId]=formId; if(c.forms && c.forms[0].id!==formId) forcedFormAlt=true; }
+        pendingStage[charId]=null;
+        const nm=(c.talents[branch]?.name||'').replace(/^轉變·/,'');
+        forcedLabel=c.name.slice(0,2)+' '+(nm||branch);
+        actionKey=branch;                            // 往下正常處理二段變體
+      } else {
+        pendingStage[charId]=null;                   // 其他輸入：取消等待，照常處理
+      }
+    } else if(ts[actionKey] && ts[actionKey].stage1===actionKey){
+      armPending=actionKey;                          // 這次是一段，加完後進入等待
+      forcedLabel=c.name.slice(0,2)+' E·一段';
+    }
+  }
+
+  // 型態角色：依目前型態把動作換成變體（burst -> burst_white / burst_black）
   let formInfo=null;
   if(c.forms && (c.formActions||[]).includes(actionKey)){
     const fid=formState[charId]||c.forms[0].id;
@@ -5351,12 +5388,15 @@ function addAct(charId, actionKey) {
     label=c.name.slice(0,2)+' '+(labels[base]||base)+'·'+formInfo.label.replace('🐉','');
     appKey=actionKey;
   }
+  if(forcedLabel) label=forcedLabel;
 
   rotSeq.push({charId,action:actionKey,label,timing,hitIndex,
     elem:appInfo.elem||c.element, gauge:appInfo.gauge||1,
     cdGroup:appInfo.cdGroup||'none', cdType:appInfo.cdType||'no_cd',
-    appKey, form:formInfo?formInfo.id:null, formAlt:!!(formInfo&&c.forms[0].id!==formInfo.id)});
+    appKey, form:formInfo?formInfo.id:(formState[charId]||null),
+    formAlt:(!!(formInfo&&c.forms[0].id!==formInfo.id))||forcedFormAlt});
   if(actionKey==='burst'||actionKey.startsWith('burst_')) burstUsed[charId]=true;
+  if(armPending) pendingStage[charId]=armPending;
   renderRotSeq();
   renderCharActionRows();
 }
