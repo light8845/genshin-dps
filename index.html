@@ -126,6 +126,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 @keyframes stage2pulse{0%,100%{box-shadow:0 0 3px rgba(255,200,80,0.5)}50%{box-shadow:0 0 11px 2px rgba(255,200,80,0.9)}}
 .stage2-hint{font-size:10px;color:var(--gold);margin-left:6px;align-self:center;white-space:nowrap}
 .cd-badge{position:absolute;top:-5px;right:-5px;background:#c53030;color:#fff;border-radius:99px;font-size:9px;padding:1px 4px;min-width:18px;text-align:center;pointer-events:none}
+.cd-badge.charge-badge{background:var(--gold);color:#1a1a1a;font-weight:700}
 .skill-modal{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:100}
 .skill-modal-box{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:20px;min-width:220px}
 .skill-modal-title{font-size:13px;color:var(--text);text-align:center;margin-bottom:14px}
@@ -5260,7 +5261,11 @@ function renderCharActionRows() {
       let dis=onCD||bUsed;
       const glow=branchKeys.includes(a.key);   // 二段可接的輸入 → 發亮且可點
       if(glow) dis=false;
-      const badge=onCD?`<span class="cd-badge">${cd.toFixed(1)}</span>`:bUsed?`<span class="cd-badge">✓</span>`:'';
+      let badge=onCD?`<span class="cd-badge">${cd.toFixed(1)}</span>`:bUsed?`<span class="cd-badge">✓</span>`:'';
+      if(a.key==='skill' && c.charges){          // 充能技能：右下角顯示層數
+        const av=cdState[id+'_charges']; const n=(av==null?c.charges.max:av);
+        dis=(n<=0); badge=`<span class="cd-badge charge-badge">${n}</span>`;
+      }
       btns+=`<button class="act-btn${dis?' on-cd':''}${glow?' stage2-glow':''}" ${dis?'disabled':''} onclick="addAct('${id}','${a.key}')">${a.label}${badge}</button>`;
     });
     // 手動型態鈕：僅在「沒有二段技能」時才顯示（杜林改用二段，不顯示）
@@ -5282,21 +5287,34 @@ function computeRotCDState() {
   const cdState={};
   let elapsed=0;
   const skillCDs={}; // id -> remaining cd
+  const chargeSt={}; // id -> {avail,timer}  充能技能
+  team.forEach(id=>{ if(id&&CHARS[id]&&CHARS[id].charges) chargeSt[id]={avail:CHARS[id].charges.max,timer:0}; });
 
   // Reset
   rotSeq.forEach(entry=>{
+    const t=entry.timing;
     // Reduce all CDs
-    Object.keys(skillCDs).forEach(k=>{skillCDs[k]=Math.max(0,skillCDs[k]-entry.timing);});
-    elapsed+=entry.timing;
+    Object.keys(skillCDs).forEach(k=>{skillCDs[k]=Math.max(0,skillCDs[k]-t);});
+    // 推進充能回復
+    Object.keys(chargeSt).forEach(id=>{
+      const cfg=CHARS[id].charges, cs=chargeSt[id];
+      if(cs.avail<cfg.max){ cs.timer-=t; while(cs.timer<=0 && cs.avail<cfg.max){ cs.avail++; cs.timer+=(cs.avail<cfg.max)?cfg.cd:0; } }
+    });
+    elapsed+=t;
     const c=CHARS[entry.charId];
-    if(entry.action==='skill'||entry.action.startsWith('skill_')){
+    const isSkill=entry.action==='skill'||entry.action.startsWith('skill_');
+    if(isSkill && c.charges){
+      const cfg=c.charges, cs=chargeSt[entry.charId];
+      if(cs){ const wasFull=cs.avail>=cfg.max; if(cs.avail>0) cs.avail--; if(wasFull) cs.timer=cfg.cd; }
+    } else if(isSkill){
       const cd=entry.action==='skill_short'?4:(c.talents.skill?.cd||8);
       skillCDs[entry.charId]=(skillCDs[entry.charId]||0)===0?cd:Math.max(skillCDs[entry.charId],cd);
     }
+    const isBurst=entry.action==='burst'||entry.action.startsWith('burst_');
+    if(isBurst && c.charges && c.charges.resetOn==='burst' && chargeSt[entry.charId]){ chargeSt[entry.charId].avail=c.charges.max; chargeSt[entry.charId].timer=0; }
   });
-  Object.entries(skillCDs).forEach(([id,cd])=>{
-    cdState[id+'_skill']=cd;
-  });
+  Object.entries(skillCDs).forEach(([id,cd])=>{ cdState[id+'_skill']=cd; });
+  Object.entries(chargeSt).forEach(([id,cs])=>{ cdState[id+'_charges']=cs.avail; });
   return cdState;
 }
 
@@ -5319,6 +5337,7 @@ function addAct(charId, actionKey) {
         const formId=(ts[pend].forms||{})[branch];
         if(formId){ formState[charId]=formId; if(c.forms && c.forms[0].id!==formId) forcedFormAlt=true; }
         pendingStage[charId]=null;
+        if(ts[pend].sticky) armPending=pend;   // 夜巡等持續狀態：解析後仍維持等待
         const nm=(c.talents[branch]?.name||'').replace(/^轉變·/,'');
         forcedLabel=c.name.slice(0,2)+' '+(nm||branch);
         actionKey=branch;                            // 往下正常處理二段變體
@@ -5438,25 +5457,43 @@ function renderRotSeq() {
   }).join('');
   document.getElementById('rot-total-time').textContent=rotSeq.reduce((s,e)=>s+e.timing,0).toFixed(1)+'s';
 }
+// 依目前 rotSeq 重算所有衍生狀態（撤回/清除後呼叫，根治狀態卡住）
+function recomputeRotState(){
+  Object.keys(burstUsed).forEach(k=>delete burstUsed[k]);
+  Object.keys(pendingStage).forEach(k=>delete pendingStage[k]);
+  Object.keys(formState).forEach(k=>delete formState[k]);
+  Object.keys(normalHitIndex).forEach(k=>delete normalHitIndex[k]);
+  rotSeq.forEach(e=>{
+    const c=CHARS[e.charId]; if(!c) return;
+    if(e.action==='burst'||e.action.startsWith('burst_')) burstUsed[e.charId]=true;
+    if(e.form) formState[e.charId]=e.form;
+    const ts=c.twoStage;
+    if(ts){
+      let stage1Key=null, stickyKey=null;
+      for(const sk in ts){
+        if(ts[sk].stage1===e.action) stage1Key=sk;
+        if(ts[sk].sticky && Object.values(ts[sk].branches).includes(e.action)) stickyKey=sk;
+      }
+      if(stage1Key) pendingStage[e.charId]=stage1Key;      // 一段 → 等待
+      else if(stickyKey) pendingStage[e.charId]=stickyKey;  // 持續態的二段 → 維持等待
+      else delete pendingStage[e.charId];                   // 其他 → 解除
+    }
+  });
+}
 function removeAct(i){
-  const e=rotSeq[i];
   rotSeq.splice(i,1);
-  if(e.action==='burst') delete burstUsed[e.charId];
-  // Reset segment counter for affected char so it recalculates
-  if(normalHitIndex[e.charId]) delete normalHitIndex[e.charId];
+  recomputeRotState();
   renderRotSeq(); renderCharActionRows();
 }
 function undoRot(){
   if(!rotSeq.length) return;
-  const e=rotSeq.pop();
-  if(e.action==='burst') delete burstUsed[e.charId];
-  if(normalHitIndex[e.charId]) delete normalHitIndex[e.charId];
+  rotSeq.pop();
+  recomputeRotState();
   renderRotSeq(); renderCharActionRows();
 }
 function clearRot(){
   rotSeq.length=0;
-  Object.keys(burstUsed).forEach(k=>delete burstUsed[k]);
-  Object.keys(normalHitIndex).forEach(k=>delete normalHitIndex[k]);
+  recomputeRotState();
   renderRotSeq(); renderCharActionRows();
 }
 
@@ -5468,8 +5505,12 @@ function buildDOTEvents(rotationList) {
   const dots = [];
   const totalTime = rotationList.reduce((s,e)=>s+e.timing, 0);
   let elapsed = 0;
+  const skillCastCount = {};  // 累計戰技施放次數（八重結界等級用）
+  const burstTimes = {}; let _bt=0;  // 各角色大招時點（結界被天雷摧毀的截斷點）
+  rotationList.forEach(e=>{ _bt+=e.timing; if((e.action||'').startsWith('burst')||e.action==='burst'){(burstTimes[e.charId]=burstTimes[e.charId]||[]).push(_bt);} });
   rotationList.forEach(entry => {
     elapsed += entry.timing;
+    if((entry.action||'').startsWith('skill')||entry.action==='skill') skillCastCount[entry.charId]=(skillCastCount[entry.charId]||0)+1;
     const c = CHARS[entry.charId];
     const st = teamStats[entry.charId] || defaultStats(entry.charId);
 
@@ -5527,9 +5568,12 @@ function buildDOTEvents(rotationList) {
         const lvKey = (p.talent==='burst') ? 'burst' : (p.talent.startsWith('skill') ? 'skill' : 'normal');
         const lv = st.talentLv[lvKey] || 10;
         const mults = getMults(tal, lv);
-        const m = mults[p.hitIndex||0];
+        let hi = p.hitIndex||0;
+        if(p.levelByCount){ const cap=((st.constLv||0)>=2?4:3); hi=Math.min(skillCastCount[entry.charId]||1, cap)-1; }
+        const m = mults[hi];
         if(!(m>0)) return;
-        const iv = p.interval||1, dur = p.duration||0;
+        const iv = p.interval||1; let dur = p.duration||0;
+        if(p.consumedBy==='burst'){ const bt=(burstTimes[entry.charId]||[]).find(t=>t>elapsed+1e-6); if(bt!=null) dur=Math.min(dur, bt-elapsed); }
         let k=1;
         while(true){
           const tt = elapsed + iv*k;
@@ -5640,6 +5684,7 @@ function runCalculation() {
   let totalDmg=0;
   const buffState={zhongli_shield:false};
   const bolState={};  // 生命之契後台狀態（charId -> 當前生命之契%）；不顯示於 UI
+  const turretCount={};  // 八重殺生櫻：場上結界數（大招動態傷害用）
   // ── 月結晶追蹤器 ──────────────────────────────────────
   const lunarCrystalOn = teamHasLunarCrystal();
   const lunarCrystal = { triggerLog: [], waterAuraBy: null };
@@ -5709,6 +5754,7 @@ function runCalculation() {
       if(action==='charged') {talent=c.talents.charged; talentKey='normal';}
       if(isSkillAct)         {talent=c.talents[action]||c.talents.skill;   talentKey='skill';}
       if(isBurstAct)         {talent=c.talents[action]||c.talents.burst;   talentKey='burst';}
+      if(isSkillAct) turretCount[charId]=(turretCount[charId]||0)+1;   // 八重：放置結界計數
       const lv=tlv[talentKey]||10;
       // ── 生命之契（後台額外倍率區，不顯示於UI）──
       const _bol=c.bondOfLife;
@@ -5727,6 +5773,15 @@ function runCalculation() {
       } else {
         mults=allMults.filter(m=>typeof m==='number'&&m>0&&m<20);
         hits=talent?.hits||mults.map((_,i)=>`[${i+1}]`);
+      }
+      // 八重大招動態：初擊(野干役咒) + 每摧毀一株結界一道天狐霆雷
+      if(c.dynamicBurst && isBurstAct){
+        const db=c.dynamicBurst, n=Math.min(turretCount[charId]||0, db.max||3);
+        const base=allMults[db.baseHit]||0, per=allMults[db.perTurretHit]||0;
+        mults=[]; hits=[];
+        if(base>0){ mults.push(base); hits.push((talent.hits||[])[db.baseHit]||'初擊'); }
+        for(let q=0;q<n;q++){ mults.push(per); hits.push(`天狐霆雷#${q+1}`); }
+        turretCount[charId]=0;   // 大招摧毀全部結界
       }
     }
     if(!mults.length) return;
