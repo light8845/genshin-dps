@@ -125,8 +125,11 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 .act-btn.stage2-glow{border-color:var(--gold);color:var(--gold);background:rgba(255,200,80,0.12);animation:stage2pulse 1s ease-in-out infinite}
 @keyframes stage2pulse{0%,100%{box-shadow:0 0 3px rgba(255,200,80,0.5)}50%{box-shadow:0 0 11px 2px rgba(255,200,80,0.9)}}
 .stage2-hint{font-size:10px;color:var(--gold);margin-left:6px;align-self:center;white-space:nowrap}
+.rot-token.marker{opacity:0.65;font-style:italic;background:transparent;border:1px dashed var(--border);color:var(--text2)}
+.act-btn.exit-stage-btn{border-color:#c53030;color:#ff8a8a;margin-left:4px;font-size:10px;padding:2px 8px}
 .cd-badge{position:absolute;top:-5px;right:-5px;background:#c53030;color:#fff;border-radius:99px;font-size:9px;padding:1px 4px;min-width:18px;text-align:center;pointer-events:none}
 .cd-badge.charge-badge{background:var(--gold);color:#1a1a1a;font-weight:700}
+.cd-badge.droplet-badge{background:#2b6cb0;color:#fff;font-weight:700}
 .skill-modal{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:100}
 .skill-modal-box{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:20px;min-width:220px}
 .skill-modal-title{font-size:13px;color:var(--text);text-align:center;margin-bottom:14px}
@@ -167,6 +170,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
 .log-body .react-tag.burgeon{background:rgba(244,121,74,0.15);color:var(--pyro)}
 .log-body .react-tag.lunarcharged{background:linear-gradient(90deg,rgba(199,125,255,0.22),rgba(79,195,247,0.22));color:#d8b8ff;border:1px solid rgba(199,125,255,0.35)}
 .log-body .react-tag.lunarcrystal{background:linear-gradient(90deg,rgba(180,150,230,0.22),rgba(240,180,41,0.18));color:#cbb8ee;border:1px solid rgba(180,150,230,0.35)}
+.log-body .react-tag.lunarbloom{background:linear-gradient(90deg,rgba(180,150,230,0.22),rgba(106,200,120,0.20));color:#cbb8ee;border:1px solid rgba(180,150,230,0.35)}
 .log-buff{color:var(--anemo);font-size:11px}
 .elem-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:2px;vertical-align:middle}
 ::-webkit-scrollbar{width:3px}
@@ -236,7 +240,8 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC','Microsof
       <div class="card">
         <div class="card-title">角色面板</div>
         <div class="form-grid">
-          <div class="form-group"><label class="form-label">基礎攻擊力（角色+武器）</label><input class="form-input" id="s-atk" type="number" value="2847"></div>
+          <div class="form-group"><label class="form-label">面板總攻擊力</label><input class="form-input" id="s-atk" type="number" value="2847"></div>
+          <div class="form-group"><label class="form-label">基礎攻擊白值（角色+武器，供班尼特/九條加成用）</label><input class="form-input" id="s-base-atk" type="number" value="1100"></div>
           <div class="form-group"><label class="form-label">暴擊率 (%)</label><input class="form-input" id="s-cr" type="number" value="72.3" step="0.1"></div>
           <div class="form-group"><label class="form-label">暴擊傷害 (%)</label><input class="form-input" id="s-cd" type="number" value="214.6" step="0.1"></div>
           <div class="form-group"><label class="form-label">元素精通</label><input class="form-input" id="s-em" type="number" value="98"></div>
@@ -4634,7 +4639,7 @@ const AMP_BASE = {
 const TRANS_MULT = {
   overloaded: 2.0, superconduct: 0.5, swirl_pyro: 0.6, swirl_hydro: 0.6,
   swirl_elec: 0.6, swirl_cryo: 0.6, electrocharged: 1.2, bloom: 2.0,
-  hyperbloom: 3.0, burgeon: 3.0, burning: 0.25
+  hyperbloom: 3.0, burgeon: 3.0, burning: 0.25, shatter: 1.5
 };
 
 const LEVEL_BASE_DMG = { // character level -> base damage for transformation reactions
@@ -4827,20 +4832,14 @@ function processReaction(enemyState, triggerElem, triggerGauge, reaction, isAtta
   // Determine who is trigger vs aura for ratio calculation
   // Ratio is: amount consumed from aura = triggerGauge * ratio
   let auraConsumePerTrigger = 1; // default 1:1
-  if (reaction === 'vaporize' || reaction === 'melt') {
-    // pyro on hydro/cryo (1:2 -> pyro consumed more, hydro/cryo less)
-    // hydro on pyro / cryo on pyro (1:1 from trigger, 0.5 from aura)
-    if (triggerElem === 'pyro') {
-      // hydro/cryo is aura, trigger is pyro -> ratio 2:1 (pyro:aura) -> aura consumes 0.5 per trigger
-      auraConsumePerTrigger = 0.5;
-    } else {
-      // pyro is aura, trigger is hydro/cryo -> ratio 1:2 -> aura consumes 2 per trigger
-      auraConsumePerTrigger = 2.0;
-    }
+  if (reaction === 'vaporize') {
+    // 水克火：水觸發(火附著)消耗2火；火觸發(水附著)消耗0.5水
+    auraConsumePerTrigger = (triggerElem === 'hydro') ? 2.0 : 0.5;
+  } else if (reaction === 'melt') {
+    // 火克冰：火觸發(冰附著)消耗2冰；冰觸發(火附著)消耗0.5火
+    auraConsumePerTrigger = (triggerElem === 'pyro') ? 2.0 : 0.5;
   } else if (reaction === 'frozen') {
-    // cryo trigger on hydro aura: 1:2 ratio (aura=hydro consumed more)
-    if (triggerElem === 'cryo') auraConsumePerTrigger = 2.0;
-    else auraConsumePerTrigger = 0.5;
+    auraConsumePerTrigger = (triggerElem === 'cryo') ? 2.0 : 0.5;
   } else if (reaction.startsWith('swirl') || reaction === 'crystalize') {
     auraConsumePerTrigger = 2.0; // anemo/geo consume 2 of aura per 1 trigger
   }
@@ -4981,9 +4980,43 @@ function lunarCrystalChordHit(participantIds, resMult) {
   return { norm, crit, exp, comps, weights };
 }
 
-// ─────────────────────────────────────────────────────
-// STATE
-// ─────────────────────────────────────────────────────
+// ── 月綻放（Lunarbloom）──────────────────────────────
+// 綻放的異化（倍率1.0），沿用月曜加權求和框架。enable 角色資料含 lunarReaction:'lunarbloom'。
+// 註：啟用角色尚未推出，權重暫沿用月結晶 0.6/0.3/0.05；待官方資料再校。
+function teamHasLunarBloom() {
+  return team.some(id => id && CHARS[id] && CHARS[id].lunarReaction === 'lunarbloom');
+}
+function lunarBloomComponent(st, resMult) {
+  const cLv = +st.clv || 90;
+  const em  = +st.em || 0;
+  const cr  = Math.min((+st.cr || 5) / 100, 1);
+  const cd  = (+st.cd || 50) / 100;
+  const lunarBaseUp = (+st.lunarBaseUp || 0) / 100;
+  const lunarDmgUp  = (+st.lunarDmgUp  || 0) / 100;
+  const lunarElev   = (+st.lunarElev   || 0) / 100;
+  const flatAdd     = (+st.lunarFlatAdd || 0);
+  const reactionBonus = 1 + emLunarBonus(em) + lunarDmgUp;
+  const base = lunarLevelBase(cLv) * LUNAR_REACT_MULT.lunarbloom * (1 + lunarBaseUp) * reactionBonus + flatAdd;
+  const pre = base * resMult * (1 + lunarElev);
+  return { norm: pre, crit: pre * (1 + cd), exp: pre * (1 + cr * cd) };
+}
+function lunarBloomHit(participantIds, resMult) {
+  const comps = [];
+  participantIds.forEach(id => {
+    const st = teamStats[id] || defaultStats(id);
+    if (!st) return;
+    comps.push({ id, name: (CHARS[id]?.name || id), ...lunarBloomComponent(st, resMult) });
+  });
+  if (!comps.length) return { norm: 0, crit: 0, exp: 0, comps: [], weights: [] };
+  comps.sort((a, b) => b.exp - a.exp);
+  let norm = 0, crit = 0, exp = 0; const weights = [];
+  comps.forEach((c, i) => {
+    const w = LUNAR_WEIGHTS[Math.min(i, LUNAR_WEIGHTS.length - 1)];
+    weights.push(w);
+    norm += w * c.norm; crit += w * c.crit; exp += w * c.exp;
+  });
+  return { norm, crit, exp, comps, weights };
+}
 const team = [null,null,null,null];
 const teamStats = {};
 const teamWeapons = {};
@@ -4993,10 +5026,11 @@ const rotSeq = []; // [{charId, action, label, timing, elem, gauge, cdGroup, cdT
 const burstUsed = {};
 const formState = {};  // 型態角色（如杜林）目前型態 id
 const pendingStage = {};  // 二段技能：等待第二段輸入的角色
+const stageEnterTime = {};  // 二段狀態進入時的累計時間（夜巡等限時狀態用）
 
 function defaultStats(charId) {
   const c = CHARS[charId];
-  return {atk:1800, cr:60, cd:120, em:0, ed:0, bonus:0, hp:20000, clv:90,
+  return {atk:1800, baseAtk:1100, cr:60, cd:120, em:0, ed:0, bonus:0, hp:20000, clv:90,
           constLv:0, talentLv:{normal:10, skill:10, burst:10}};
 }
 
@@ -5118,6 +5152,7 @@ function loadCharConfig(id) {
   document.getElementById('cfg-sub').textContent = `${elemLabel(c.element)} · ${weaponLabel(c.weapon)} · ${c.rarity}★ · ${roleLabel(c.role)}`;
   document.getElementById('asc-info').textContent = `突破屬性：${c.ascension.type} +${c.ascension.value}%（六突破）`;
   document.getElementById('s-atk').value=st.atk; document.getElementById('s-cr').value=st.cr;
+  document.getElementById('s-base-atk').value=st.baseAtk!=null?st.baseAtk:1100;
   document.getElementById('s-cd').value=st.cd;   document.getElementById('s-em').value=st.em;
   document.getElementById('s-ed').value=st.ed;   document.getElementById('s-bonus').value=st.bonus;
   document.getElementById('s-hp').value=st.hp;   document.getElementById('s-clv').value=st.clv;
@@ -5129,6 +5164,7 @@ function saveCurrentStats() {
   const id = team[activeSlot]; if(!id) return;
   const st = teamStats[id];
   st.atk=+document.getElementById('s-atk').value||0;
+  st.baseAtk=+document.getElementById('s-base-atk').value||0;
   st.cr=+document.getElementById('s-cr').value||0;
   st.cd=+document.getElementById('s-cd').value||0;
   st.em=+document.getElementById('s-em').value||0;
@@ -5199,8 +5235,24 @@ function renderTalents(id,tlv) {
         <div class="talent-lv-num" id="tlv-${g.key}">${tlv[g.key]||10}</div>
         <button class="talent-btn" onclick="adjTalent('${g.key}',1)">+</button>
       </div>
-    </div>`).join('');
+    </div>`).join('') + (c.mechanicVar?`
+    <div class="talent-row">
+      <div class="talent-name">${c.mechanicVar.label}</div>
+      <div class="talent-lv-ctrl">
+        <button class="talent-btn" onclick="adjMechanic('${c.mechanicVar.key}',-1)">−</button>
+        <div class="talent-lv-num" id="mv-${c.mechanicVar.key}">${teamStats[id][c.mechanicVar.key] ?? c.mechanicVar.default}</div>
+        <button class="talent-btn" onclick="adjMechanic('${c.mechanicVar.key}',1)">+</button>
+      </div>
+    </div>`:'');
   renderTalentPreview(id,tlv);
+}
+function adjMechanic(key,d){
+  const id=team[activeSlot]; if(!id) return;
+  const mv=CHARS[id].mechanicVar; if(!mv) return;
+  const cur=teamStats[id][key] ?? mv.default;
+  teamStats[id][key]=Math.max(mv.min,Math.min(mv.max,cur+d));
+  document.getElementById('mv-'+key).textContent=teamStats[id][key];
+  renderCharActionRows();
 }
 function adjTalent(key,d) {
   const id=team[activeSlot]; if(!id) return;
@@ -5233,6 +5285,7 @@ function renderTalentPreview(id,tlv) {
 function renderCharActionRows() {
   const container=document.getElementById('char-action-rows');
   container.innerHTML='';
+  clearExpiredStages();   // 限時狀態（夜巡）時限到 → 結束，按鈕回原狀
   // Compute CD state
   const cdState=computeRotCDState();
 
@@ -5253,6 +5306,16 @@ function renderCharActionRows() {
     const ts = c.twoStage;
     const branchKeys = (pend && ts && ts[pend]) ? Object.keys(ts[pend].branches) : [];
 
+    // 那維萊特源水之滴池（顯示用）：E+3、Q+6、重擊吸收最多3
+    let dropletPool=0;
+    if(c.dropletGen){
+      rotSeq.forEach(e=>{ if(e.charId!==id) return;
+        if(e.action==='skill'||e.action.startsWith('skill_')) dropletPool+=c.dropletGen.skill||0;
+        else if(e.action==='burst'||e.action.startsWith('burst_')) dropletPool+=c.dropletGen.burst||0;
+        else if(e.action==='charged') dropletPool-=Math.min(c.chargedMaxAbsorb||3, dropletPool);
+      });
+    }
+
     let btns='';
     acts.forEach(a=>{
       const cd=cdState[id+'_'+a.key]||0;
@@ -5266,6 +5329,9 @@ function renderCharActionRows() {
         const av=cdState[id+'_charges']; const n=(av==null?c.charges.max:av);
         dis=(n<=0); badge=`<span class="cd-badge charge-badge">${n}</span>`;
       }
+      if(a.key==='charged' && c.dropletGen){     // 那維：重擊鈕顯示可吸收水滴數
+        badge=`<span class="cd-badge droplet-badge">💧${dropletPool}</span>`;
+      }
       btns+=`<button class="act-btn${dis?' on-cd':''}${glow?' stage2-glow':''}" ${dis?'disabled':''} onclick="addAct('${id}','${a.key}')">${a.label}${badge}</button>`;
     });
     // 手動型態鈕：僅在「沒有二段技能」時才顯示（杜林改用二段，不顯示）
@@ -5277,7 +5343,9 @@ function renderCharActionRows() {
       btns+=`<button class="act-btn form-btn${alt?' form-alt':''}" onclick="toggleForm('${id}')" title="切換型態">${cur.label}</button>`;
     }
     let hint='';
-    if(pend && ts && ts[pend]) hint=`<span class="stage2-hint">↳ ${ts[pend].hint||'可接二段'}</span>`;
+    if(pend && ts && ts[pend]){
+      hint=`<span class="stage2-hint">↳ ${ts[pend].hint||'可接二段'}</span>`;
+    }
     row.innerHTML=`<div class="act-avatar" style="background:var(--${c.element}-bg)">${charIconHTML(c,28)}</div>${btns}${hint}`;
     container.appendChild(row);
   });
@@ -5322,8 +5390,17 @@ function computeRotCDState() {
 // {charId: {idx, lastCharId}} - resets when non-normal or different char inserted
 const normalHitIndex = {};
 
+function clearExpiredStages(){
+  const t=rotSeq.reduce((s,e)=>s+(e.timing||0),0);
+  for(const id in pendingStage){
+    const stg=CHARS[id]?.twoStage?.[pendingStage[id]];
+    if(stg && stg.duration!=null && (t-(stageEnterTime[id]||0))>=stg.duration) delete pendingStage[id];
+  }
+}
 function addAct(charId, actionKey) {
   const c=CHARS[charId];
+  clearExpiredStages();   // 限時狀態（夜巡）時限到 → 先結束
+  const _totalBefore=rotSeq.reduce((s,e)=>s+(e.timing||0),0);
   if(actionKey==='skill'&&c.skillVariants){showSkillModal(charId);return;}
 
   // ── 二段技能（如杜林：E一段→再按E=白 / 按普攻=黑；克洛琳德夜巡同理）──
@@ -5366,6 +5443,10 @@ function addAct(charId, actionKey) {
   if(actionKey==='burst')   timing=at.burst||1.5;
   if(actionKey.startsWith('skill_')) timing=at[actionKey]||0.8;
   if(actionKey.startsWith('burst_')) timing=at[actionKey]||1.5;
+  // 那維萊特：重擊耗時依吸收的源水之滴（recomputeDroplets 會校正）
+  if(actionKey==='charged' && c.chargedWindup!=null){
+    timing=c.chargedWindup+(c.chargedAttack||0);  // 先放滿，稍後依水滴池校正
+  }
 
   const app=c.appData||{};
   let appKey=actionKey;
@@ -5415,11 +5496,18 @@ function addAct(charId, actionKey) {
     appKey, form:formInfo?formInfo.id:(formState[charId]||null),
     formAlt:(!!(formInfo&&c.forms[0].id!==formInfo.id))||forcedFormAlt});
   if(actionKey==='burst'||actionKey.startsWith('burst_')) burstUsed[charId]=true;
-  if(armPending) pendingStage[charId]=armPending;
+  if(armPending){ pendingStage[charId]=armPending; stageEnterTime[charId]=_totalBefore; }
+  recomputeDroplets();
   renderRotSeq();
   renderCharActionRows();
 }
 
+function exitStage(id){
+  rotSeq.push({charId:id, action:'_exitStage', label:(CHARS[id]?.name||'').slice(0,2)+' (結束)', timing:0, isMarker:true,
+    elem:'physical', gauge:0, cdGroup:'none', cdType:'no_cd'});
+  recomputeRotState();
+  renderRotSeq(); renderCharActionRows();
+}
 function toggleForm(id){
   const c=CHARS[id]; if(!c||!c.forms)return;
   const cur=formState[id]||c.forms[0].id;
@@ -5448,7 +5536,8 @@ function renderRotSeq() {
   const isSkill=k=>k==='skill'||k.startsWith('skill_');
   box.innerHTML=rotSeq.map((e,i)=>{
     let cls='rot-token ';
-    if(e.action==='normal') cls+='normal';
+    if(e.isMarker) cls+='marker';
+    else if(e.action==='normal') cls+='normal';
     else if(e.action==='charged') cls+='charged';
     else if(isSkill(e.action)) cls+='skill';
     else if(e.action==='burst'||e.action.startsWith('burst_')) cls+='burst';
@@ -5463,8 +5552,10 @@ function recomputeRotState(){
   Object.keys(pendingStage).forEach(k=>delete pendingStage[k]);
   Object.keys(formState).forEach(k=>delete formState[k]);
   Object.keys(normalHitIndex).forEach(k=>delete normalHitIndex[k]);
+  Object.keys(stageEnterTime).forEach(k=>delete stageEnterTime[k]);
+  let t=0;
   rotSeq.forEach(e=>{
-    const c=CHARS[e.charId]; if(!c) return;
+    const c=CHARS[e.charId]; if(!c){ t+=e.timing||0; return; }
     if(e.action==='burst'||e.action.startsWith('burst_')) burstUsed[e.charId]=true;
     if(e.form) formState[e.charId]=e.form;
     const ts=c.twoStage;
@@ -5474,9 +5565,34 @@ function recomputeRotState(){
         if(ts[sk].stage1===e.action) stage1Key=sk;
         if(ts[sk].sticky && Object.values(ts[sk].branches).includes(e.action)) stickyKey=sk;
       }
-      if(stage1Key) pendingStage[e.charId]=stage1Key;      // 一段 → 等待
+      if(stage1Key){ pendingStage[e.charId]=stage1Key; stageEnterTime[e.charId]=t; }  // 一段 → 等待，記進入時間
       else if(stickyKey) pendingStage[e.charId]=stickyKey;  // 持續態的二段 → 維持等待
       else delete pendingStage[e.charId];                   // 其他 → 解除
+    }
+    t+=e.timing||0;
+  });
+  // 限時狀態（夜巡）：累計耗時超過 duration 自動結束
+  for(const id in pendingStage){
+    const stg=CHARS[id]?.twoStage?.[pendingStage[id]];
+    if(stg && stg.duration!=null && (t-(stageEnterTime[id]||0))>=stg.duration) delete pendingStage[id];
+  }
+  recomputeDroplets();
+}
+// 那維萊特源水之滴：E命中+3、Q+6，重擊吸收最多3顆（每顆減1秒蓄力），校正各重擊耗時
+function recomputeDroplets(){
+  const pool={};
+  rotSeq.forEach(e=>{
+    const c=CHARS[e.charId]; if(!c||!c.dropletGen) return;
+    if(e.action==='skill'||e.action.startsWith('skill_')) pool[e.charId]=(pool[e.charId]||0)+(c.dropletGen.skill||0);
+    else if(e.action==='burst'||e.action.startsWith('burst_')) pool[e.charId]=(pool[e.charId]||0)+(c.dropletGen.burst||0);
+    else if(e.action==='charged' && c.chargedWindup!=null){
+      const consume=Math.min(c.chargedMaxAbsorb||3, pool[e.charId]||0);
+      pool[e.charId]=(pool[e.charId]||0)-consume;
+      e.dropletsAbsorbed=consume;
+      const constLv=(teamStats[e.charId]||{}).constLv||0;
+      let attack=c.chargedAttack||0;
+      if(constLv>=6) attack += consume*(c.c6ExtendPerDroplet||0);   // C6：每滴 +1秒持續
+      e.timing=Math.max(0,c.chargedWindup-consume)+attack;
     }
   });
 }
@@ -5600,12 +5716,42 @@ function buildDOTEvents(rotationList) {
 //   effects 支援：atkPct, atkFlat(數字 或 {ofCasterAtk,cap,flat}), dmgBonus,
 //                 elemDmg:{pyro:..}, critRate, critDmg, em, defShred, resShred:{pyro:..|all:..}
 // ─────────────────────────────────────────────────────
-function resolveBuffEff(effects, cst){
+function resolveBuffEff(effects, cst, c){
   const e=Object.assign({}, effects);
   if(e.atkFlat && typeof e.atkFlat==='object'){
-    const o=e.atkFlat; let v=(o.ofCasterAtk||0)*(cst.atk||0);
+    const o=e.atkFlat;
+    let v=(o.ofCasterAtk||0)*(cst.atk||0) + (o.ofCasterBaseAtk||0)*(cst.baseAtk||0);
     if(o.cap!=null) v=Math.min(v,o.cap);
     e.atkFlat=v+(o.flat||0);
+  }
+  if(e.atkFromHP){              // 胡桃彼岸蝶舞：攻擊提升 = 生命上限×比例（上限 = 基礎攻擊×capMultBaseAtk）
+    const o=e.atkFromHP;
+    let v=(cst.hp||0)*(o.ratio||0);
+    if(o.capMultBaseAtk!=null) v=Math.min(v,(cst.baseAtk||0)*o.capMultBaseAtk);
+    e.atkFlat=(typeof e.atkFlat==='number'?e.atkFlat:0)+v;
+    delete e.atkFromHP;
+  }
+  if(e.elemDmgPerEM){            // 萬葉風物之詩經：擴散元素增傷 = 精通×0.04%
+    const o=e.elemDmgPerEM, v=(cst.em||0)*o.per;
+    e.elemDmg=Object.assign({}, e.elemDmg||{}, {all:((e.elemDmg||{}).all||0)+v});
+    delete e.elemDmgPerEM;
+  }
+  if(e.dmgBonusPerVar){          // 依施放者的 mechanicVar（如芙寧娜氣勢）動態增傷
+    const o=e.dmgBonusPerVar, def=c?.mechanicVar?.default||0;
+    const v=(cst[o.varKey]!=null)?cst[o.varKey]:def;
+    e.dmgBonus=(e.dmgBonus||0)+Math.min(v,o.max||v)*o.per;
+    delete e.dmgBonusPerVar;
+  }
+  if(e.emFromTeamMaxEM){         // 納西妲摩耶之殿：場上角色精通 += 隊伍最高精通×25%(上限250)
+    const o=e.emFromTeamMaxEM; let maxEM=0;
+    team.forEach(tid=>{ if(tid&&teamStats[tid]) maxEM=Math.max(maxEM, teamStats[tid].em||0); });
+    e.em=(e.em||0)+Math.min(maxEM*o.ratio, o.cap);
+    delete e.emFromTeamMaxEM;
+  }
+  if(e.critRateFromCaster){      // 羅莎莉亞A4：全隊暴擊率 += 施放者暴擊率×比例(上限cap)
+    const o=e.critRateFromCaster;
+    e.critRate=(e.critRate||0)+Math.min((cst.cr||0)/100*o.ratio, o.cap||1);
+    delete e.critRateFromCaster;
   }
   return e;
 }
@@ -5618,7 +5764,7 @@ function buildActiveBuffs(timeline){
     const cst=teamStats[id]||defaultStats(id);
     c.buffs.forEach(b=>{
       if(b.cons && (cst.constLv||0) < b.cons) return;           // 命座未解鎖
-      const eff=resolveBuffEff(b.effects||{}, cst);
+      const eff=resolveBuffEff(b.effects||{}, cst, c);
       const target=b.target||'team';
       if(b.trigger==='always' || !b.trigger){
         inst.push({casterId:id, name:b.name, start:0, end:Infinity, dur:0, target, eff});
@@ -5638,7 +5784,8 @@ function buildActiveBuffs(timeline){
   return inst;
 }
 function aggBuffs(inst, charId, time, elem){
-  const B={atkPct:0,atkFlat:0,dmgBonus:0,elemDmg:0,critRate:0,critDmg:0,em:0,resShred:0,defShred:0};
+  const B={atkPct:0,atkFlat:0,dmgBonus:0,elemDmg:0,critRate:0,critDmg:0,em:0,resShred:0,defShred:0,normalDmgBonus:0,
+           actionDmgBonus:{normal:0,charged:0,skill:0,burst:0}};
   if(!inst||!inst.length) return B;
   inst.forEach(b=>{
     if(time < b.start-1e-9 || time >= b.end) return;
@@ -5646,7 +5793,9 @@ function aggBuffs(inst, charId, time, elem){
     const e=b.eff;
     B.atkPct+=e.atkPct||0; B.atkFlat+=e.atkFlat||0; B.dmgBonus+=e.dmgBonus||0;
     B.critRate+=e.critRate||0; B.critDmg+=e.critDmg||0; B.em+=e.em||0; B.defShred+=e.defShred||0;
-    if(e.elemDmg) B.elemDmg+=(e.elemDmg[elem]||0);
+    B.normalDmgBonus+=e.normalDmgBonus||0;
+    if(e.actionDmgBonus) for(const a in B.actionDmgBonus) B.actionDmgBonus[a]+=e.actionDmgBonus[a]||0;
+    if(e.elemDmg) B.elemDmg+=(e.elemDmg[elem]||e.elemDmg.all||0);
     if(e.resShred) B.resShred+=(e.resShred[elem]||e.resShred.all||0);
   });
   return B;
@@ -5689,6 +5838,8 @@ function runCalculation() {
   const lunarCrystalOn = teamHasLunarCrystal();
   const lunarCrystal = { triggerLog: [], waterAuraBy: null };
   if(lunarCrystalOn) buffLog.push({time:0, text:'月結晶啟用 — 隊伍中存在月結晶角色，角色觸發的水結晶轉為月結晶'});
+  const lunarBloomOn = teamHasLunarBloom();
+  if(lunarBloomOn) buffLog.push({time:0, text:'月綻放啟用 — 隊伍中存在月綻放角色，綻放轉為月綻放(倍率1.0，加權求和)'});
 
   // Initial buff log
   team.forEach(id=>{
@@ -5716,6 +5867,30 @@ function runCalculation() {
   const buffInst = buildActiveBuffs(timeline);
   pushBuffDisplay(buffInst, buffLog);
 
+  // ── 申鶴冰翎：掃描時間軸上的E施放 → 跨時間軸的「固定傷害資源」（每次冰命中消耗1枚）──
+  const quillGrants=[];
+  team.forEach(id=>{
+    const c=CHARS[id]; if(!c||!c.quill) return;
+    const q=c.quill, st=teamStats[id]||defaultStats(id);
+    const lv=(st.talentLv&&st.talentLv.skill)||10;
+    const ratio=q.ratioByLevel[Math.min(lv,q.ratioByLevel.length)-1]||q.ratioByLevel[q.ratioByLevel.length-1];
+    const flat=(st.atk||0)*ratio;   // 申鶴當前面板攻擊力 × 冰翎倍率
+    timeline.forEach(ev=>{
+      const act=ev.action||'';
+      const match=q.trigger==='skill'?(act==='skill'||act.startsWith('skill_')):act===q.trigger;
+      if(ev.charId===id && match){
+        quillGrants.push({start:ev.time, end:ev.time+q.duration, count:q.count, flat, element:q.element, casterId:id});
+        buffLog.push({time:ev.time, text:`${c.name} 冰翎×${q.count}（全隊・固定冰傷 +${Math.round(flat)}/次・${q.duration}s）`});
+      }
+    });
+  });
+  function quillFlatFor(time, elem){
+    let g=null;
+    for(let i=quillGrants.length-1;i>=0;i--){ const x=quillGrants[i]; if(time>=x.start-1e-9 && time<x.end){ g=x; break; } }
+    if(g && g.count>0 && elem===g.element){ g.count--; return g.flat; }
+    return 0;
+  }
+
   let prevTime=0;
   allEvents.forEach(entry=>{
     const deltaT=Math.max(0, entry.time-prevTime);
@@ -5736,12 +5911,13 @@ function runCalculation() {
       return;
     }
     const {charId,elem,gauge,cdGroup,cdType,time}=entry;
+    if(entry.isMarker) return;   // 結束夜巡等狀態標記，不計傷害
     const c=CHARS[charId];
     const st=entry.isLocked?entry.lockedStats:(teamStats[charId]||defaultStats(charId));
     const tlv=st.talentLv;
 
     // Get mults
-    let mults,hits;
+    let mults,hits,emCoeffs=[];
     let bolApplies=false, bolCoeff=0;  // 生命之契：本次動作是否吃額外倍率區、係數
     if(entry.isDOT) {
       mults=entry.mults||[]; hits=entry.hits||mults.map((_,i)=>`[${i+1}]`);
@@ -5764,15 +5940,18 @@ function runCalculation() {
         if(action===_bol.applyTo){ bolApplies=true; bolCoeff=_bol.coeffByLevel[Math.min(14,Math.max(0,lv-1))]||0; }
       }
       let allMults=getMults(talent,lv);
+      const emRow = talent?.emLv ? (talent.emLv[Math.min(lv-1,talent.emLv.length-1)]||[]) : [];
       // Normal: single segment
       if(action==='normal'&&entry.hitIndex!=null) {
         const sm=allMults[entry.hitIndex];
         mults=sm!=null?[sm]:allMults.slice(0,1);
+        emCoeffs=[emRow[entry.hitIndex]||0];
         const sh=talent?.hits?.[entry.hitIndex];
         hits=sh?[sh]:[`A${(entry.hitIndex||0)+1}`];
       } else {
-        mults=allMults.filter(m=>typeof m==='number'&&m>0&&m<20);
-        hits=talent?.hits||mults.map((_,i)=>`[${i+1}]`);
+        mults=[]; emCoeffs=[]; const _h=[];
+        allMults.forEach((mm,idx)=>{ if(typeof mm==='number'&&mm>0&&mm<20){ mults.push(mm); emCoeffs.push(emRow[idx]||0); _h.push((talent?.hits||[])[idx]); } });
+        hits = _h.some(x=>x) ? _h.map((x,i)=>x||`[${i+1}]`) : mults.map((_,i)=>`[${i+1}]`);
       }
       // 八重大招動態：初擊(野干役咒) + 每摧毀一株結界一道天狐霆雷
       if(c.dynamicBurst && isBurstAct){
@@ -5781,7 +5960,23 @@ function runCalculation() {
         mults=[]; hits=[];
         if(base>0){ mults.push(base); hits.push((talent.hits||[])[db.baseHit]||'初擊'); }
         for(let q=0;q<n;q++){ mults.push(per); hits.push(`天狐霆雷#${q+1}`); }
+        emCoeffs=mults.map(()=>0);
         turretCount[charId]=0;   // 大招摧毀全部結界
+      }
+      // 那維萊特衡平之炎：基礎6跳；C6 每吸收一滴 +2跳（延長持續）
+      if(c.chargedDynamicTicks && action==='charged'){
+        const cfg=c.chargedDynamicTicks, perTick=allMults[0]||0;
+        const extra=((st.constLv||0)>=6)? cfg.perDropletTicksC6*(entry.dropletsAbsorbed||0) : 0;
+        const total=cfg.baseTicks+extra;
+        mults=[]; hits=[]; emCoeffs=[];
+        for(let q=0;q<total;q++){ mults.push(perTick); hits.push(`衡平之炎·跳${q+1}`); emCoeffs.push(0); }
+      }
+      // 雷電將軍願力：夢想一刀依願力提升（每層 +7%）
+      if(c.resolveScale && (action==='burst'||action.startsWith('burst_'))){
+        const rs=c.resolveScale, def=c.mechanicVar?.default||0;
+        const ts=teamStats[charId]||{};
+        const v=(ts[rs.varKey]!=null)?ts[rs.varKey]:def;
+        for(const hi in rs.hits){ const idx=+hi; if(mults[idx]!=null) mults[idx]+=v*rs.hits[hi]; }
       }
     }
     if(!mults.length) return;
@@ -5791,20 +5986,31 @@ function runCalculation() {
     const em=st.em+B.em; const ed=st.ed/100; const bon=st.bonus/100; const cLv=+st.clv||90;
     const defMult=(cLv+100)/((cLv+100)+(eLv+100)*(1-defS-B.defShred));
     const canAttach=attachTracker.canAttach(charId,cdGroup,cdType,time);
-    const reaction=canAttach?getReactionType(enemy,elem):null;
+    let reaction=canAttach?getReactionType(enemy,elem):null;
+    // 碎冰：鈍擊(雙手劍普攻/重擊)或下落攻擊命中凍結目標 → 物理碎冰(係數1.5)，並打破凍結
+    const shatterCapable = (action==='plunge'||action.startsWith('plunge'))
+                        || (c.weapon==='claymore' && (action==='normal'||action==='charged'));
+    if(enemy.isFrozen && shatterCapable && !reaction){
+      reaction='shatter';
+      enemy.frozenAmount=0; enemy.isFrozen=false;   // 碎冰打破凍結
+    }
     // 月感電：隊伍含月感電角色時，角色觸發的感電轉為月感電（改由雷暴雲加權結算，抑制原本感電的一次性傷害）
     const isLunarCharged=(reaction==='electrocharged'&&lunarChargedActive());
+    const isLunarBloom=(reaction==='bloom'&&lunarBloomOn);
     let ampMult=1; let transExtra=0;
     const emA=emAmpBonus(em); const emT=emTransBonus(em); const emC=emCatBonus(em);
     if(reaction==='vaporize')  ampMult=(elem==='pyro'?1.5:2.0)*(1+emA);
     else if(reaction==='melt') ampMult=(elem==='pyro'?2.0:1.5)*(1+emA);
-    else if(reaction&&TRANS_MULT[reaction]&&!isLunarCharged) transExtra=TRANS_MULT[reaction]*(LEVEL_BASE_DMG[cLv]||1447)*(1+emT);
+    else if(reaction&&TRANS_MULT[reaction]&&!isLunarCharged&&!isLunarBloom) transExtra=TRANS_MULT[reaction]*(LEVEL_BASE_DMG[cLv]||1447)*(1+emT);
 
     let effRes=eRes-resS-B.resShred;
     if(buffState.zhongli_shield) effRes-=0.20;
     const resMult=effRes<0?1-effRes/2:effRes<0.75?1-effRes:1/(4*effRes+1);
 
     let dmgBonus=1+ed+bon+B.dmgBonus+B.elemDmg;
+    const baseAction=(action||'').split('_')[0];
+    if(B.normalDmgBonus && baseAction==='normal') dmgBonus+=B.normalDmgBonus;  // 宵宮焰硝庭火舞：普攻專屬增傷
+    if(B.actionDmgBonus && B.actionDmgBonus[baseAction]) dmgBonus+=B.actionDmgBonus[baseAction]; // 命座等：指定天賦增傷
     if(charId==='hutao'&&elem==='pyro') dmgBonus+=0.33;
     let catFlatAdd=0;
     if(reaction==='aggravate') catFlatAdd=(LEVEL_BASE_DMG[cLv]||1447)*1.15*(1+emC)*resMult;
@@ -5843,6 +6049,23 @@ function runCalculation() {
           }
         }
       }
+      // ── 月綻放 ──────────────────────────────────（須在 processReaction 消耗水/草附著之前）
+      if(lunarBloomOn && reaction==='bloom'){
+        const participants=new Set(); participants.add(charId);
+        const hyBy=enemy.elements.hydro?.by||{};
+        for(const k in hyBy){ if(k!=='_env'&&hyBy[k]>1e-4) participants.add(k); }
+        const deBy=enemy.elements.dendro?.by||{};
+        for(const k in deBy){ if(k!=='_env'&&deBy[k]>1e-4) participants.add(k); }
+        const hit=lunarBloomHit(participants,resMult);
+        totalDmg+=hit.exp;
+        const who=hit.comps.map((c,i)=>`${c.name}×${hit.weights[i]}`).join(' + ');
+        dmgLog.push({time,html:
+          `<span class="react-tag lunarbloom">月綻放</span> `+
+          `暴擊:<span class="crit">${Math.round(hit.crit).toLocaleString()}</span>，`+
+          `不暴擊:<span class="nocrit">${Math.round(hit.norm).toLocaleString()}</span>，`+
+          `期望:<strong>${Math.round(hit.exp).toLocaleString()}</strong> `+
+          `<span style="color:var(--text3);font-size:10px">組分:${who}</span>`});
+      }
       if(reaction) processReaction(enemy,elem,ag,reaction,!entry.isDOT);
       if((reaction==='burning'||reaction==='electrocharged')&&!entry.tickCheck) lastReact[reaction]=time;
       if(!reaction||['aggravate','spread','electrocharged','burning','quicken'].includes(reaction))
@@ -5880,7 +6103,15 @@ function runCalculation() {
       // 生命之契：額外倍率區（加在倍率上，會被蒸發/融化放大），逐擊乘法消耗
       let bolExtra=0;
       if(bolApplies){ const p=bolState[charId]; if(p!=null&&p>=c.bondOfLife.minPct){ bolExtra=p*bolCoeff; bolState[charId]=p*(1-c.bondOfLife.decayPerHit); } }
-      const pre=atk*(m+bolExtra)*defMult*resMult*dmgBonus;
+      const quillFlat=(elem==='cryo')?quillFlatFor(time,'cryo'):0;   // 申鶴冰翎固定傷害（每冰命中消耗1枚）
+      // 生命值加成：特定動作倍率改吃生命上限（芙寧娜召喚物、那維萊特重擊）
+      const useHp = Array.isArray(c.hpScaleActions) && c.hpScaleActions.some(a=>action===a||action.startsWith(a+'_'));
+      const scaleBase = useHp ? (st.hp||0) : atk;
+      // 久岐忍A1類：每下附加 生命上限×比例
+      let hpFlat=0;
+      if(c.flatHpDmg && Array.isArray(c.flatHpDmg.actions) && c.flatHpDmg.actions.some(a=>action===a||action.startsWith(a+'_')))
+        hpFlat=(st.hp||0)*(c.flatHpDmg.ratio||0);
+      const pre=(scaleBase*(m+bolExtra)+em*(emCoeffs[mi]||0)+quillFlat+hpFlat)*defMult*resMult*dmgBonus;
       let normHit,critHit,expHit;
       if(transExtra>0){normHit=pre;critHit=pre*(1+cd_v);expHit=pre*critMult+transExtra*resMult;}
       else if(catFlatAdd>0){normHit=pre+catFlatAdd;critHit=pre*(1+cd_v)+catFlatAdd;expHit=(pre+catFlatAdd)*critMult;}
@@ -5921,7 +6152,7 @@ function reactionName(r){
     frozen:'凍結',swirl_pyro:'火擴散',swirl_hydro:'水擴散',swirl_elec:'雷擴散',swirl_cryo:'冰擴散',
     electrocharged:'感電',burning:'燃燒',bloom:'綻放',hyperbloom:'超綻放',burgeon:'烈綻放',
     crystalize:'結晶',aggravate:'超激化',spread:'蔓激化',quicken:'原激化',
-    lunarcharged:'月感電',lunarcrystal:'月結晶'
+    lunarcharged:'月感電',lunarcrystal:'月結晶',shatter:'碎冰'
   };
   return map[r]||r;
 }
