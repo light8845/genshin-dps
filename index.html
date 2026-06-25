@@ -5702,7 +5702,7 @@ function buildDOTEvents(rotationList) {
             elem:p.element||'physical', gauge:p.gauge||0,
             cdGroup:p.cdGroup||'no_cd', cdType:p.cdType||'no_cd',
             isLocked:true, lockedStats:{...st, talentLv:{...st.talentLv}},
-            mults:[m], hits:[p.name], isDOT:true,
+            mults:[m], hits:[p.name], isDOT:true, hpScale:p.hpScale||false,
           });
           k++;
         }
@@ -6221,7 +6221,7 @@ function runCalculation() {
       const quillFlat=(elem==='cryo')?quillFlatFor(time,'cryo'):0;   // 申鶴冰翎固定傷害（每冰命中消耗1枚）
       const flatGrantAdd=flatGrantFor(time, action, elem);            // 雲堇/尼可C4/愛可菲C2等固定傷害授予
       // 生命值加成：特定動作倍率改吃生命上限（芙寧娜召喚物、那維萊特重擊）
-      const useHp = Array.isArray(c.hpScaleActions) && c.hpScaleActions.some(a=>action===a||action.startsWith(a+'_'));
+      const useHp = entry.hpScale || (action && Array.isArray(c.hpScaleActions) && c.hpScaleActions.some(a=>action===a||action.startsWith(a+'_')));
       const scaleBase = useHp ? (st.hp||0) : atk;
       // 久岐忍A1類：每下附加 生命上限×比例
       let hpFlat=0;
