@@ -5269,6 +5269,7 @@ function renderTalentPreview(id,tlv) {
   const c=CHARS[id];
   let html='';
   [['normal','普攻',c.talents.normal],['normal','重擊',c.talents.charged],
+   ['normal','下落',c.talents.plunge],
    ['skill','戰技',c.talents.skill],['burst','爆發',c.talents.burst]].forEach(([key,label,t])=>{
     if(!t?.lv) return;
     const lv=tlv[key]||10; const mults=getMults(t,lv); const hits=t.hits||mults.map((_,i)=>`[${i+1}]`);
@@ -5301,6 +5302,7 @@ function renderCharActionRows() {
       {key:'skill',   label:'E'},
       {key:'burst',   label:'Q'},
     ];
+    if(c.talents && c.talents.plunge) acts.push({key:'plunge', label:'下落'});  // 魈/閑雲等下落角色
 
     const pend = pendingStage[id];
     const ts = c.twoStage;
@@ -5439,6 +5441,7 @@ function addAct(charId, actionKey) {
   let timing=0.2;
   if(actionKey==='normal')  timing=at.normal||0.2;
   if(actionKey==='charged') timing=at.charged||0.4;
+  if(actionKey==='plunge')  timing=at.plunge||0.8;
   if(actionKey==='skill')   timing=at.skill||0.8;
   if(actionKey==='burst')   timing=at.burst||1.5;
   if(actionKey.startsWith('skill_')) timing=at[actionKey]||0.8;
@@ -5471,7 +5474,7 @@ function addAct(charId, actionKey) {
   }
 
   // ── Label ────────────────────────────────────────────
-  const labels={normal:'普攻',charged:'重擊',skill:'E',burst:'Q'};
+  const labels={normal:'普攻',charged:'重擊',skill:'E',burst:'Q',plunge:'下落'};
   let label;
   if(actionKey==='normal') {
     label = `${c.name.slice(0,2)} A${(hitIndex||0)+1}`;
@@ -5709,8 +5712,43 @@ function buildDOTEvents(rotationList) {
   return dots;
 }
 
-// ─────────────────────────────────────────────────────
-// 定時 BUFF 引擎（資料驅動）
+// ── A. 協同攻擊（被隊友動作觸發的額外一擊，用施放者數值）──
+//   角色資料 coordinated:[{name, activatedBy:'skill'|'burst', window, trigger:'normal'|'charged'|'na'|'skill'|'burst',
+//                         element, mult(攻擊力倍率), icd, gauge, cdType, cons}]
+function buildCoordinatedEvents(rotationList){
+  const out=[];
+  const totalTime=rotationList.reduce((s,e)=>s+e.timing,0);
+  team.forEach(id=>{
+    const c=CHARS[id]; if(!c||!Array.isArray(c.coordinated)) return;
+    const st=teamStats[id]||defaultStats(id);
+    c.coordinated.forEach(co=>{
+      if(co.cons && (st.constLv||0)<co.cons) return;
+      // 啟動視窗（該角色施放 activatedBy）
+      let el=0; const windows=[];
+      rotationList.forEach(e=>{ el+=e.timing; const act=e.action||'';
+        const on=(co.activatedBy==='skill')?(act==='skill'||act.startsWith('skill_'))
+               :(co.activatedBy==='burst')?(act==='burst'||act.startsWith('burst_')):act===co.activatedBy;
+        if(e.charId===id && on) windows.push([el, el+(co.window||10)]);
+      });
+      if(!windows.length) return;
+      // 掃描觸發動作（任何角色），視窗內依 ICD 注入
+      let lastFire=-1e9, el2=0;
+      rotationList.forEach(e=>{ el2+=e.timing; const act=e.action||''; const ba=act.split('_')[0];
+        const trig=(co.trigger==='na'||co.trigger==='na_ca')?(ba==='normal'||ba==='charged')
+                 :(co.trigger==='skill')?(ba==='skill'):(co.trigger==='burst')?(ba==='burst'):ba===co.trigger;
+        if(!trig) return;
+        if(!windows.some(w=>el2>=w[0]-1e-9 && el2<w[1])) return;
+        if(el2-lastFire < (co.icd||0)-1e-9) return;
+        lastFire=el2;
+        out.push({time:el2, charId:id, label:`${c.name} ${co.name}`,
+          elem:co.element||'physical', gauge:co.gauge||1, cdGroup:co.cdGroup||'no_cd', cdType:co.cdType||'no_cd',
+          isLocked:true, lockedStats:{...st, talentLv:{...st.talentLv}},
+          mults:[co.mult||0], hits:[co.name], isDOT:true, isCoordinated:true});
+      });
+    });
+  });
+  return out;
+}
 //   角色資料可含 buffs:[{name, trigger:'always'|'skill'|'burst', duration, target:'team'|'self',
 //                        cons:<需要命座數,0=天賦預設>, effects:{...}}]
 //   effects 支援：atkPct, atkFlat(數字 或 {ofCasterAtk,cap,flat}), dmgBonus,
@@ -5741,6 +5779,18 @@ function resolveBuffEff(effects, cst, c){
     const v=(cst[o.varKey]!=null)?cst[o.varKey]:def;
     e.dmgBonus=(e.dmgBonus||0)+Math.min(v,o.max||v)*o.per;
     delete e.dmgBonusPerVar;
+  }
+  if(e.actionDmgBonusPerVar){    // 依 mechanicVar 給「指定動作」動態增傷（克洛琳德C4隨生命之契%）
+    const o=e.actionDmgBonusPerVar, def=c?.mechanicVar?.default||0;
+    const v=(cst[o.varKey]!=null)?cst[o.varKey]:def;
+    const add=Math.min(v*o.per, o.max!=null?o.max:v*o.per);
+    e.actionDmgBonus=Object.assign({}, e.actionDmgBonus||{});
+    e.actionDmgBonus[o.action]=(e.actionDmgBonus[o.action]||0)+add;
+    delete e.actionDmgBonusPerVar;
+  }
+  if(e.emFromCasterEM){          // 砂糖A4：隊友精通 += 施放者精通×比例(此處含本人,近似)
+    e.em=(e.em||0)+(cst.em||0)*(e.emFromCasterEM.ratio||0);
+    delete e.emFromCasterEM;
   }
   if(e.emFromTeamMaxEM){         // 納西妲摩耶之殿：場上角色精通 += 隊伍最高精通×25%(上限250)
     const o=e.emFromTeamMaxEM; let maxEM=0;
@@ -5841,6 +5891,17 @@ function runCalculation() {
   const lunarBloomOn = teamHasLunarBloom();
   if(lunarBloomOn) buffLog.push({time:0, text:'月綻放啟用 — 隊伍中存在月綻放角色，綻放轉為月綻放(倍率1.0，加權求和)'});
 
+  // C. 反應暴擊（納西妲C2等）：特定轉化反應可暴擊。掃描隊伍找符合的角色/命座。
+  const REACTION_CRIT = { on:false, rate:0, dmg:0, reactions:[] };
+  team.forEach(id=>{
+    if(!id) return; const c=CHARS[id]; const st=teamStats[id]||defaultStats(id);
+    if(id==='nahida' && (st.constLv||0)>=2){
+      REACTION_CRIT.on=true; REACTION_CRIT.rate=0.20; REACTION_CRIT.dmg=1.00;
+      REACTION_CRIT.reactions=['bloom','hyperbloom','burgeon','burning'];
+    }
+  });
+  if(REACTION_CRIT.on) buffLog.push({time:0, text:`反應暴擊啟用（納西妲C2）— 綻放/超綻放/烈綻放/燃燒可暴擊(暴率+${Math.round(REACTION_CRIT.rate*100)}%、暴傷+${Math.round(REACTION_CRIT.dmg*100)}%)`});
+
   // Initial buff log
   team.forEach(id=>{
     if(id==='hutao') buffLog.push({time:0, text:'突破天賦2「血之灶火」— HP≤50%火傷+33%（計算預設啟用）'});
@@ -5857,7 +5918,8 @@ function runCalculation() {
   const addReactGrid=(r,iv)=>{ for(let tt=iv; tt<=_totalT+1e-6; tt+=iv) reactGrid.push({time:+tt.toFixed(3), tickCheck:r}); };
   if(_teamElems.has('pyro')&&_teamElems.has('dendro')) addReactGrid('burning',0.25);
   if(_teamElems.has('electro')&&_teamElems.has('hydro')) addReactGrid('electrocharged',1.0);
-  const allEvents = [...timeline,...dotEvents,...reactGrid].sort((a,b)=>a.time-b.time);
+  const coordEvents = buildCoordinatedEvents(rotSeq);
+  const allEvents = [...timeline,...dotEvents,...coordEvents,...reactGrid].sort((a,b)=>a.time-b.time);
   // 反應持續傷害的代表性精通/等級（取隊伍最高精通者；劇變傷害與攻擊力無關）
   const _teamIds=team.filter(Boolean);
   const reactEM = _teamIds.length?Math.max(..._teamIds.map(id=>(teamStats[id]||defaultStats(id)).em||0)):0;
@@ -5891,6 +5953,42 @@ function runCalculation() {
     return 0;
   }
 
+  // ── 通用固定傷害授予（雲堇/尼可C4/杜林C1白焰/愛可菲C2 式：依施放者數值給隊友每擊加固定傷害）──
+  const flatGrants=[];
+  team.forEach(id=>{
+    const c=CHARS[id]; if(!c||!Array.isArray(c.flatGrants)) return;
+    const st=teamStats[id]||defaultStats(id);
+    c.flatGrants.forEach(fg=>{
+      if(fg.cons && (st.constLv||0)<fg.cons) return;       // 命座門檻
+      const lv=(st.talentLv&&st.talentLv[fg.lvTalent||'skill'])||10;
+      let ratio=fg.ratio;
+      if(fg.ratioByLevel) ratio=fg.ratioByLevel[Math.min(lv,fg.ratioByLevel.length)-1]||fg.ratioByLevel[fg.ratioByLevel.length-1];
+      const statVal=(fg.ofStat==='def')?(st.def||0):(fg.ofStat==='hp')?(st.hp||0):(st.atk||0);
+      const flat=statVal*ratio;
+      timeline.forEach(ev=>{
+        const act=ev.action||'';
+        const match=(fg.trigger==='skill')?(act==='skill'||act.startsWith('skill_'))
+                   :(fg.trigger==='burst')?(act==='burst'||act.startsWith('burst_')):act===fg.trigger;
+        if(ev.charId===id && match){
+          flatGrants.push({start:ev.time, end:ev.time+(fg.duration||20), charges:fg.charges||999,
+            flat, actions:fg.actions||'all', element:fg.element||null, casterId:id, name:fg.name||'增傷'});
+          buffLog.push({time:ev.time, text:`${c.name} ${fg.name||'增傷'}（每擊+${Math.round(flat)}・${fg.charges||'∞'}擊・${fg.duration||20}s）`});
+        }
+      });
+    });
+  });
+  function flatGrantFor(time, action, elem){
+    let total=0; const baseAct=(action||'').split('_')[0];
+    for(let i=flatGrants.length-1;i>=0;i--){
+      const x=flatGrants[i];
+      if(time<x.start-1e-9 || time>=x.end || x.charges<=0) continue;
+      if(x.actions!=='all' && !(Array.isArray(x.actions)&&x.actions.includes(baseAct))) continue;
+      if(x.element && x.element!==elem) continue;
+      x.charges--; total+=x.flat;
+    }
+    return total;
+  }
+
   let prevTime=0;
   allEvents.forEach(entry=>{
     const deltaT=Math.max(0, entry.time-prevTime);
@@ -5904,13 +6002,24 @@ function runCalculation() {
         const effR=eRes-resS;
         const rMult=effR<0?1-effR/2:effR<0.75?1-effR:1/(4*effR+1);
         const tick=(TRANS_MULT[r]||0)*(LEVEL_BASE_DMG[reactLv]||1447)*(1+emTransBonus(reactEM))*rMult;
-        if(tick>0){ totalDmg+=tick;
-          dmgLog.push({time:entry.time, html:`<span class="react-tag ${r}">${reactionName(r)}·持續</span> 期望:<strong>${Math.round(tick).toLocaleString()}</strong>`}); }
+        if(tick>0){
+          if(REACTION_CRIT.on && REACTION_CRIT.reactions.includes(r)){
+            const tExp=tick*(1+REACTION_CRIT.rate*REACTION_CRIT.dmg); totalDmg+=tExp;
+            dmgLog.push({time:entry.time, html:`<span class="react-tag ${r}">${reactionName(r)}·持續(可暴)</span> `+
+              `暴擊:<span class="crit">${Math.round(tick*(1+REACTION_CRIT.dmg)).toLocaleString()}</span>，`+
+              `不暴擊:<span class="nocrit">${Math.round(tick).toLocaleString()}</span>，`+
+              `期望:<strong>${Math.round(tExp).toLocaleString()}</strong>`});
+          } else {
+            totalDmg+=tick;
+            dmgLog.push({time:entry.time, html:`<span class="react-tag ${r}">${reactionName(r)}·持續</span> 期望:<strong>${Math.round(tick).toLocaleString()}</strong>`});
+          }
+        }
         if(r==='electrocharged'){ enemy.removeAmount('electro',0.4); enemy.removeAmount('hydro',0.4); }
       }
       return;
     }
     const {charId,elem,gauge,cdGroup,cdType,time}=entry;
+    const action = entry.action || '';   // 提升至此：後台(isDOT)事件無 action，給空字串避免 ReferenceError
     if(entry.isMarker) return;   // 結束夜巡等狀態標記，不計傷害
     const c=CHARS[charId];
     const st=entry.isLocked?entry.lockedStats:(teamStats[charId]||defaultStats(charId));
@@ -5922,12 +6031,12 @@ function runCalculation() {
     if(entry.isDOT) {
       mults=entry.mults||[]; hits=entry.hits||mults.map((_,i)=>`[${i+1}]`);
     } else {
-      const {action}=entry;
       let talent=null; let talentKey='normal';
       const isSkillAct=action==='skill'||action.startsWith('skill_');
       const isBurstAct=action==='burst'||action.startsWith('burst_');
       if(action==='normal')  {talent=c.talents.normal;  talentKey='normal';}
       if(action==='charged') {talent=c.talents.charged; talentKey='normal';}
+      if(action==='plunge')  {talent=c.talents.plunge;  talentKey='normal';}   // 下落攻擊(綁普攻天賦等級)
       if(isSkillAct)         {talent=c.talents[action]||c.talents.skill;   talentKey='skill';}
       if(isBurstAct)         {talent=c.talents[action]||c.talents.burst;   talentKey='burst';}
       if(isSkillAct) turretCount[charId]=(turretCount[charId]||0)+1;   // 八重：放置結界計數
@@ -6002,6 +6111,11 @@ function runCalculation() {
     if(reaction==='vaporize')  ampMult=(elem==='pyro'?1.5:2.0)*(1+emA);
     else if(reaction==='melt') ampMult=(elem==='pyro'?2.0:1.5)*(1+emA);
     else if(reaction&&TRANS_MULT[reaction]&&!isLunarCharged&&!isLunarBloom) transExtra=TRANS_MULT[reaction]*(LEVEL_BASE_DMG[cLv]||1447)*(1+emT);
+    // C. 反應暴擊：若此反應可暴擊，算出期望倍率與暴擊值
+    let transCanCrit=false, transCritFactor=1;
+    if(transExtra>0 && reaction && REACTION_CRIT.on && REACTION_CRIT.reactions.includes(reaction)){
+      transCanCrit=true; transCritFactor=1+REACTION_CRIT.rate*REACTION_CRIT.dmg;
+    }
 
     let effRes=eRes-resS-B.resShred;
     if(buffState.zhongli_shield) effRes-=0.20;
@@ -6103,7 +6217,9 @@ function runCalculation() {
       // 生命之契：額外倍率區（加在倍率上，會被蒸發/融化放大），逐擊乘法消耗
       let bolExtra=0;
       if(bolApplies){ const p=bolState[charId]; if(p!=null&&p>=c.bondOfLife.minPct){ bolExtra=p*bolCoeff; bolState[charId]=p*(1-c.bondOfLife.decayPerHit); } }
+      if(bolExtra>0 && c.bolConsBoost && (st.constLv||0)>=c.bolConsBoost.cons) bolExtra*=c.bolConsBoost.mult; // 阿蕾奇諾C1：生命之契加成×2
       const quillFlat=(elem==='cryo')?quillFlatFor(time,'cryo'):0;   // 申鶴冰翎固定傷害（每冰命中消耗1枚）
+      const flatGrantAdd=flatGrantFor(time, action, elem);            // 雲堇/尼可C4/愛可菲C2等固定傷害授予
       // 生命值加成：特定動作倍率改吃生命上限（芙寧娜召喚物、那維萊特重擊）
       const useHp = Array.isArray(c.hpScaleActions) && c.hpScaleActions.some(a=>action===a||action.startsWith(a+'_'));
       const scaleBase = useHp ? (st.hp||0) : atk;
@@ -6111,9 +6227,9 @@ function runCalculation() {
       let hpFlat=0;
       if(c.flatHpDmg && Array.isArray(c.flatHpDmg.actions) && c.flatHpDmg.actions.some(a=>action===a||action.startsWith(a+'_')))
         hpFlat=(st.hp||0)*(c.flatHpDmg.ratio||0);
-      const pre=(scaleBase*(m+bolExtra)+em*(emCoeffs[mi]||0)+quillFlat+hpFlat)*defMult*resMult*dmgBonus;
+      const pre=(scaleBase*(m+bolExtra)+em*(emCoeffs[mi]||0)+quillFlat+hpFlat+flatGrantAdd)*defMult*resMult*dmgBonus;
       let normHit,critHit,expHit;
-      if(transExtra>0){normHit=pre;critHit=pre*(1+cd_v);expHit=pre*critMult+transExtra*resMult;}
+      if(transExtra>0){normHit=pre;critHit=pre*(1+cd_v);expHit=pre*critMult;}  // 直接命中本體（轉化反應另計於下方反應傷害行，避免重複加總）
       else if(catFlatAdd>0){normHit=pre+catFlatAdd;critHit=pre*(1+cd_v)+catFlatAdd;expHit=(pre+catFlatAdd)*critMult;}
       else{normHit=pre*ampMult;critHit=pre*(1+cd_v)*ampMult;expHit=pre*critMult*ampMult;}
       totalDmg+=expHit;
@@ -6127,8 +6243,18 @@ function runCalculation() {
     });
 
     if(transExtra>0&&reaction){
-      const tDmg=transExtra*resMult; totalDmg+=tDmg;
-      dmgLog.push({time,html:`<span class="react-tag ${reaction}">${reactionName(reaction)}傷害</span> <strong>${Math.round(tDmg).toLocaleString()}</strong>`});
+      const tBase=transExtra*resMult;
+      if(transCanCrit){
+        const tNorm=tBase, tCrit=tBase*(1+REACTION_CRIT.dmg), tExp=tBase*transCritFactor;
+        totalDmg+=tExp;
+        dmgLog.push({time,html:`<span class="react-tag ${reaction}">${reactionName(reaction)}傷害(可暴)</span> `+
+          `暴擊:<span class="crit">${Math.round(tCrit).toLocaleString()}</span>，`+
+          `不暴擊:<span class="nocrit">${Math.round(tNorm).toLocaleString()}</span>，`+
+          `期望:<strong>${Math.round(tExp).toLocaleString()}</strong>`});
+      } else {
+        const tDmg=tBase; totalDmg+=tDmg;
+        dmgLog.push({time,html:`<span class="react-tag ${reaction}">${reactionName(reaction)}傷害</span> <strong>${Math.round(tDmg).toLocaleString()}</strong>`});
+      }
     }
   });
 
