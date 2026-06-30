@@ -5174,13 +5174,30 @@ const ENKA_TRAVELER_DEPOT = {"501": "traveler_anemo", "502": "traveler_pyro", "5
 const ENKA_FP_ELEM = {pyro:'40',electro:'41',hydro:'42',dendro:'43',anemo:'44',geo:'45',cryo:'46',phys:'30'};
 function enkaStatus(msg,err){const e=document.getElementById('uid-status');if(e){e.textContent=msg;e.style.color=err?'var(--pyro)':'var(--text3)';}}
 async function fetchEnka(uid){
-  const url='https://enka.network/api/uid/'+uid;
-  try{const r=await fetch(url,{headers:{'Accept':'application/json'}});if(r.ok)return await r.json();throw new Error('HTTP '+r.status);}
-  catch(e){
-    // 直連失敗(多半CORS)→ 試公用代理
-    const proxy='https://api.allorigins.win/raw?url='+encodeURIComponent(url);
-    const r=await fetch(proxy);if(!r.ok)throw new Error('HTTP '+r.status+'(含代理)');return await r.json();
+  const target='https://enka.network/api/uid/'+uid;
+  const enc=encodeURIComponent(target);
+  const attempts=[
+    {name:'直連', url:target, parse:r=>r.json()},
+    {name:'corsproxy', url:'https://corsproxy.io/?url='+enc, parse:r=>r.json()},
+    {name:'codetabs', url:'https://api.codetabs.com/v1/proxy/?quest='+enc, parse:r=>r.json()},
+    {name:'allorigins', url:'https://api.allorigins.win/raw?url='+enc, parse:r=>r.json()},
+    {name:'allorigins2', url:'https://api.allorigins.win/get?url='+enc, parse:async r=>{const j=await r.json();return JSON.parse(j.contents);}},
+    {name:'thingproxy', url:'https://thingproxy.freeboard.io/fetch/'+target, parse:r=>r.json()},
+  ];
+  let lastErr;
+  for(let i=0;i<attempts.length;i++){
+    const a=attempts[i];
+    try{
+      enkaStatus('讀取中…('+a.name+' '+(i+1)+'/'+attempts.length+')',false);
+      const r=await fetch(a.url);
+      if(!r.ok){ lastErr=new Error(a.name+' HTTP '+r.status); continue; }
+      const data=await a.parse(r);
+      if(data && data.message && !data.avatarInfoList){ lastErr=new Error('Enka:'+data.message); continue; }
+      if(data && (data.avatarInfoList || data.playerInfo)) return data;
+      lastErr=new Error(a.name+' 回應格式異常');
+    }catch(e){ lastErr=e; }
   }
+  throw lastErr||new Error('全部來源失敗');
 }
 function resolveEnkaChar(av){
   const aid=String(av.avatarId);
